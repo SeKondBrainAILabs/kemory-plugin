@@ -2240,5 +2240,205 @@ class FixtureCoverage(unittest.TestCase):
         self.assertEqual(self.UNCAPTURED & have, set(),
                          "UNCAPTURED excuses an event that already has a fixture")
 
+
+class SkippedServerTest(unittest.TestCase):
+    """Reporting that the HOST has switched our MCP server off.
+
+    Claude Code caches a connect failure in ~/.claude/mcp-needs-auth-cache.json
+    and skips the server for 15 minutes. The cache is GLOBAL, so one slow
+    launch in one project takes the tools away from every session started
+    afterwards. Nothing in this plugin used to read that file, so
+    /kemory:status reported a healthy credential, a reachable API and no
+    duplicate -- and a tick saying the server would start -- while the host was
+    not running it.
+
+    The asymmetry here is the mirror of the duplicate tests: a missed report
+    costs a user an unexplained session with no memory, while a false report
+    cries wolf at a machine that is working exactly as configured. So every
+    test that asserts we speak up has a twin asserting we stay quiet.
+    """
+
+    def setUp(self):
+        self.home = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.home, ignore_errors=True)
+        self.mine = "https://api.kemory.s9n.ai"
+        self.cache = pathlib.Path(self.home) / ".claude" / "mcp-needs-auth-cache.json"
+        self.cache.parent.mkdir(parents=True, exist_ok=True)
+
+    def env(self, **extra):
+        e = {k: v for k, v in os.environ.items() if not k.startswith("KEMORY_")}
+        e.update({"HOME": self.home, "CLAUDE_PROJECT_DIR": self.home,
+                  "KEMORY_URL": self.mine, "KEMORY_API_KEY": "k",
+                  # Nothing here should need the network; keep a stray call short.
+                  "KEMORY_CONTEXT_TIMEOUT": "2"})
+        e.update(extra)
+        return e
+
+    def write_cache(self, age_seconds, key="plugin:kemory:kemory", millis=True):
+        """A cached failure that happened `age_seconds` ago."""
+        stamp = time.time() - age_seconds
+        self.cache.write_text(json.dumps({
+            "kora": {"timestamp": int(time.time() * 1000)},
+            key: {"timestamp": int(stamp * 1000) if millis else int(stamp),
+                  "id": "b4df5be7a6adbda5"},
+        }))
+
+    def write_duplicate(self):
+        (pathlib.Path(self.home) / ".claude.json").write_text(json.dumps(
+            {"mcpServers": {"kemory": {"type": "http",
+                                       "url": f"{self.mine}/mcp/v1"}}}))
+
+    def status(self):
+        return subprocess.run([str(SCRIPTS / "status.sh")], input="{}",
+                              text=True, capture_output=True, env=self.env())
+
+    def session_start(self):
+        r = subprocess.run([str(SCRIPTS / "session-start.sh")],
+                           input=json.dumps({"source": "startup"}),
+                           text=True, capture_output=True, env=self.env())
+        try:
+            return json.loads(r.stdout).get("systemMessage", "")
+        except Exception:
+            return ""
+
+    # --- speaks up ----------------------------------------------------------
+
+    def test_status_reports_a_live_skip(self):
+        self.write_cache(age_seconds=120)
+        out = self.status().stdout
+        self.assertIn("SKIPPING", out)
+        self.assertIn("plugin:kemory:kemory", out)
+
+    def test_status_does_not_tick_a_server_the_host_is_refusing_to_run(self):
+        # The credential really is fine. Saying so with a green tick beside the
+        # red line that matters is how someone reads past it.
+        self.write_cache(age_seconds=120)
+        out = self.status().stdout
+        self.assertIn("would start", out)
+        self.assertNotIn("will start", out)
+
+    def test_status_names_where_the_real_error_is(self):
+        # The per-cwd log directory is keyed by the cwd of the session that
+        # FAILED, so it is routinely under an unrelated project. Someone who is
+        # not told that looks in this project's folder and finds nothing.
+        self.write_cache(age_seconds=120)
+        out = self.status().stdout
+        self.assertIn("claude-cli-nodejs", out)
+        self.assertIn("FAILED", out)
+
+    def test_status_says_the_cache_is_shared(self):
+        # The one fact that turns this from "kemory is broken" into "another
+        # session timed out": the failure need not have happened here.
+        self.write_cache(age_seconds=120)
+        self.assertIn("EVERY session", self.status().stdout)
+
+    def test_session_start_warns_the_agent(self):
+        self.write_cache(age_seconds=120)
+        msg = self.session_start()
+        self.assertIn("SKIPPING", msg)
+        self.assertIn("hooks are unaffected", msg)
+
+    def test_session_start_warns_every_session_not_once_a_day(self):
+        # Deliberately NOT throttled like the paste and version notices. Those
+        # nag about durable config; this reports a fault that is true for the
+        # next few minutes and then gone. Every session inside the window
+        # really has no tools, so telling only the first leaves the rest
+        # guessing -- which is the confusion this whole change removes.
+        self.write_cache(age_seconds=120)
+        self.assertIn("SKIPPING", self.session_start())
+        self.assertIn("SKIPPING", self.session_start())
+        self.assertIn("SKIPPING", self.session_start())
+
+    def test_the_summaries_still_ship_alongside_the_warning(self):
+        # A warning that costs the session its context injection would be a
+        # worse trade than the silence it replaced.
+        self.write_cache(age_seconds=120)
+        r = subprocess.run([str(SCRIPTS / "session-start.sh")],
+                           input=json.dumps({"source": "startup"}),
+                           text=True, capture_output=True, env=self.env())
+        out = json.loads(r.stdout)
+        self.assertIn("additionalContext", out["hookSpecificOutput"])
+        self.assertTrue(out["hookSpecificOutput"]["additionalContext"].strip())
+
+    def test_a_seconds_valued_timestamp_is_still_read_as_now(self):
+        # The host writes milliseconds. A seconds-valued entry taken as
+        # milliseconds dates to 1970, which would read as an expired window and
+        # report nothing at all.
+        self.write_cache(age_seconds=120, millis=False)
+        self.assertIn("SKIPPING", self.status().stdout)
+
+    # --- stays quiet --------------------------------------------------------
+
+    def test_silent_with_no_cached_failure(self):
+        self.cache.write_text("{}")
+        out = self.status().stdout
+        self.assertNotIn("SKIPPING", out)
+        self.assertIn("will start", out)
+        self.assertEqual("", self.session_start())
+
+    def test_silent_when_the_cache_file_does_not_exist(self):
+        self.assertFalse(self.cache.exists())
+        self.assertNotIn("SKIPPING", self.status().stdout)
+        self.assertEqual("", self.session_start())
+
+    def test_silent_once_the_retry_window_has_passed(self):
+        # Past 15 minutes the host retries on the next launch, so there is no
+        # live fault. status still explains it, because it answers "why did I
+        # have no tools earlier"; session-start does not, because it speaks
+        # only about the session it is starting.
+        self.write_cache(age_seconds=7200)
+        out = self.status().stdout
+        self.assertNotIn("SKIPPING", out)
+        self.assertIn("window", out)
+        self.assertIn("will start", out)
+        self.assertEqual("", self.session_start())
+
+    def test_silent_when_we_are_deliberately_standing_down(self):
+        # A stand-down is an exit 1 by design. If the host caches that as a
+        # failed launch, reporting it would turn our own correct behaviour into
+        # an alarm on a machine that is configured exactly as intended.
+        self.write_cache(age_seconds=120)
+        self.write_duplicate()
+        out = self.status().stdout
+        self.assertNotIn("SKIPPING", out)
+        self.assertIn("stand down", out)
+        self.assertEqual("", self.session_start())
+
+    def test_an_unparseable_cache_is_not_a_failure(self):
+        self.cache.write_text("{not json")
+        r = self.status()
+        self.assertEqual(r.returncode, 0)
+        self.assertNotIn("SKIPPING", r.stdout)
+        self.assertEqual("", self.session_start())
+
+    def test_an_entry_for_something_else_is_not_ours(self):
+        self.cache.write_text(json.dumps(
+            {"some-other-server": {"timestamp": int(time.time() * 1000)}}))
+        self.assertNotIn("SKIPPING", self.status().stdout)
+        self.assertEqual("", self.session_start())
+
+    # --- read-only ----------------------------------------------------------
+
+    def test_nothing_ever_writes_to_the_hosts_cache(self):
+        """The invariant the whole design rests on.
+
+        Clearing the entry looks like the obvious fix and is wrong twice: the
+        file is the host's own undocumented state, global and written by
+        concurrent sessions with no lock we can take, so a read-modify-write
+        can drop another server's entry; and the entry exists because a launch
+        really did exceed 30s, so clearing it every session start trades one
+        skipped session for a 30s stall in all of them.
+        """
+        self.write_cache(age_seconds=120)
+        before = self.cache.read_bytes()
+        mtime = self.cache.stat().st_mtime
+        self.status()
+        self.session_start()
+        self.assertEqual(before, self.cache.read_bytes(),
+                         "the cache file's contents changed")
+        self.assertEqual(mtime, self.cache.stat().st_mtime,
+                         "the cache file was rewritten")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

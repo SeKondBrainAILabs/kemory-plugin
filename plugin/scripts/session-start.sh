@@ -229,6 +229,55 @@ emit_setup_hint() {
 }
 
 kemory_resolve_auth || emit_setup_hint
+
+# Say so when the host has switched our tools off for this session.
+#
+# Claude Code caches a connect failure in ~/.claude/mcp-needs-auth-cache.json
+# and skips the server for 15 minutes. That cache is GLOBAL: one slow launch in
+# one project silently removes the kemory_* tools from every session started
+# afterwards, and the only trace is a line in /mcp the user is not reading. The
+# agent then works the whole session believing it has no memory tools, or worse,
+# that the user has none.
+#
+# Deliberately NOT throttled by a sentinel the way the paste and version
+# notices are. Those nag about durable config that will still be there
+# tomorrow, so once a day is right. This reports a transient fault that is
+# true RIGHT NOW and gone in fifteen minutes: every session inside the window
+# genuinely has no tools, so every one of them needs telling, and a 24h
+# sentinel would inform the first and leave the rest guessing — the exact
+# confusion this exists to remove.
+#
+# Runs after resolve_auth on purpose. With no credential the bundled server
+# would not start for that reason instead, and emit_setup_hint above already
+# says so; adding this would answer the wrong question.
+KEMORY_SKIPPED_NOTICE=""
+skipped="$(kemory_mcp_skipped_at)"
+if [ -n "$skipped" ]; then
+  skipped_at="${skipped##*	}"
+  retry_at=$(( skipped_at + 900 ))
+  # Only while the window is open. Past it the host retries on the next launch,
+  # so a notice would describe a fault that has already cleared.
+  if [ "$(date +%s)" -lt "$retry_at" ]; then
+    # A stand-down is a deliberate exit 1. If the host caches that as a failed
+    # launch, reporting it would turn our own correct behaviour into an alarm.
+    # Checked second because it costs a subprocess and most sessions skip it.
+    duplicate="$(kemory_find_duplicate_server)"
+    if [ -z "$duplicate" ] || [ "${KEMORY_ALLOW_DUPLICATE:-0}" = "1" ]; then
+      until_when="$(date -r "$retry_at" '+%H:%M' 2>/dev/null \
+                    || date -d "@$retry_at" '+%H:%M' 2>/dev/null || echo "$retry_at")"
+      KEMORY_SKIPPED_NOTICE="Kemory plugin: Claude Code is SKIPPING the kemory MCP server in this session — it cached a connect failure and retries at $until_when. That cache is shared by every session on this machine, so the failure may have come from an unrelated project. The kemory_* tools are unavailable until then; your hooks are unaffected, so context injection, recall and capture still work. Restart the session after $until_when to get the tools back, or run /kemory:status for detail."
+      if [ -n "$KEMORY_NOTICE" ]; then
+        KEMORY_NOTICE="$KEMORY_SKIPPED_NOTICE
+
+$KEMORY_NOTICE"
+      else
+        KEMORY_NOTICE="$KEMORY_SKIPPED_NOTICE"
+      fi
+      export KEMORY_NOTICE
+    fi
+  fi
+fi
+
 command -v curl >/dev/null 2>&1 || { emit_instruction_only; exit 0; }
 
 DEPTH="${KEMORY_CONTEXT_DEPTH:-l3}"

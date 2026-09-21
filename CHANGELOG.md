@@ -3,6 +3,36 @@
 All notable changes to this project are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.7.5] — 2026-09-23
+
+### Fixed
+- **The plugin never noticed when Claude Code had switched its own MCP server
+  off.** After a connect timeout the host records the failure in
+  `~/.claude/mcp-needs-auth-cache.json` and skips that server for 15 minutes.
+  That cache is *global*: one slow launch in one project silently removes the
+  `kemory_*` tools from every session started afterwards, including sessions
+  whose own launch would have succeeded in under a second. Nothing here read
+  that file, so `/kemory:status` resolved a credential, reached the API, found
+  no duplicate, and ticked "bundled server will start" while the host was not
+  running it — the same lie the TOOLS section was fixed for once before,
+  arriving one layer up. It now reports the skip, names the retry time, says
+  the cache is shared so the failure may have come from an unrelated project,
+  and points at the per-cwd log directory where the real error is. SessionStart
+  says the same thing once per affected session, so an agent stops working a
+  whole session believing the user has no memory.
+
+### Notes
+- Read-only by design. Clearing the entry is the obvious-looking fix and is
+  wrong twice over: the file is the host's own undocumented state, global and
+  written by concurrent sessions with no lock available to us, so a
+  read-modify-write can drop another server's entry; and the entry is there
+  because a launch really did exceed 30s, so clearing it on every session start
+  trades one skipped session for a 30s stall in all of them. Startup time is a
+  separate problem from reporting it.
+- Nothing is reported while the plugin is deliberately standing down for a
+  duplicate server. That stand-down is an intentional exit 1, and treating a
+  host that caches it as a fault would raise an alarm on a machine configured
+  exactly as intended.
 ## [0.7.4] — 2026-09-23
 
 ### Fixed

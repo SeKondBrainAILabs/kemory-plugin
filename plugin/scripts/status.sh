@@ -88,18 +88,66 @@ fi
 # is to resolve it here too and name who would serve.
 echo
 echo "TOOLS — the kemory_* MCP tools"
+
+# Resolved here rather than at its own section below, because the skip report
+# needs it: a stand-down is a deliberate exit 1, and a host that caches that
+# as a failed launch would otherwise make us report our own correct behaviour
+# as the host wrongly skipping us.
+duplicate="$(kemory_find_duplicate_server)"
+standing_down=0
+[ -n "$duplicate" ] && [ "${KEMORY_ALLOW_DUPLICATE:-0}" != "1" ] && standing_down=1
+
+# Everything below answers "could this server start". The host decides whether
+# it is ALLOWED to, and after a connect timeout the answer is no for 15 minutes
+# across every session on the machine. Ask that first, and downgrade the verb
+# of every line under it: a tick saying the server "will start" beside a host
+# that is refusing to launch it is the same lie, one layer up.
+verb="will start"
+serves="ok"
+skipped=""
+[ "$standing_down" -eq 0 ] && skipped="$(kemory_mcp_skipped_at)"
+if [ -n "$skipped" ]; then
+  skipped_key="${skipped%%	*}"
+  skipped_at="${skipped##*	}"
+  now="$(date +%s)"
+  retry_at=$(( skipped_at + 900 ))
+  when="$(date -r "$skipped_at" '+%H:%M:%S' 2>/dev/null \
+          || date -d "@$skipped_at" '+%H:%M:%S' 2>/dev/null || echo "$skipped_at")"
+  until_when="$(date -r "$retry_at" '+%H:%M:%S' 2>/dev/null \
+          || date -d "@$retry_at" '+%H:%M:%S' 2>/dev/null || echo "$retry_at")"
+  if [ "$now" -lt "$retry_at" ]; then
+    # No green tick under a red cross: the credential really is fine, but
+    # saying so with a ✔ next to a host that is refusing to launch the server
+    # is how someone reads past the line that matters.
+    verb="would start"
+    serves="info"
+    bad "Claude Code is SKIPPING this server — it cached a connect failure"
+    info "'$skipped_key' failed at $when; the host retries by itself at $until_when"
+    info "that cache is global, so the tools are off for EVERY session started in"
+    info "that window — including this one, whose own launch may be fine"
+    info "restart the session to retry sooner, or wait for $until_when"
+  else
+    # The window has passed, so the host will try again on the next launch.
+    # Worth naming anyway: it explains a session that had no tools earlier.
+    info "a connect failure for '$skipped_key' was cached at $when; that window"
+    info "has passed, so the host retries on the next launch"
+  fi
+  info "the real error is under ~/Library/Caches/claude-cli-nodejs/, in a folder"
+  info "named for the cwd of the session that FAILED — often another project"
+fi
+
 if [ -n "${KEMORY_BASE_URL:-}" ]; then
   if [ -n "${KEMORY_API_KEY:-}" ] || [ -n "${KEMORY_TOKEN:-}" ]; then
     if command -v python3 >/dev/null 2>&1; then
-      ok "bundled server will start — credential from the environment"
+      "$serves" "bundled server $verb — credential from the environment"
     else
       bad "credential found, but python3 is missing and the CLI cannot read it"
       info "install python3, or run 'kemory login' to use the CLI's own bridge"
     fi
   elif command -v kemory >/dev/null 2>&1; then
-    ok "bundled server will start — CLI credential, served by 'kemory mcp serve'"
+    "$serves" "bundled server $verb — CLI credential, served by 'kemory mcp serve'"
   elif command -v python3 >/dev/null 2>&1; then
-    ok "bundled server will start — CLI credential, served by the bundled bridge"
+    "$serves" "bundled server $verb — CLI credential, served by the bundled bridge"
   else
     bad "credential found, but neither the kemory CLI nor python3 is available"
   fi
@@ -113,9 +161,8 @@ fi
 # The launcher stands down when another server already covers this same Kemory,
 # so the status has to say the same thing -- a tick here beside a server that
 # quietly declines to start is exactly the lie this section was fixed for once
-# already.
-duplicate="$(kemory_find_duplicate_server)"
-if [ -n "$duplicate" ] && [ "${KEMORY_ALLOW_DUPLICATE:-0}" != "1" ]; then
+# already. ($duplicate is resolved above, where the skip report needs it.)
+if [ "$standing_down" -eq 1 ]; then
   info "…but it will stand down: '${duplicate%%	*}' in ${duplicate##*	} already"
   info "serves this same Kemory. Your hooks are unaffected. Remove that entry to"
   info "use this one instead, or set KEMORY_ALLOW_DUPLICATE=1 to run both."
