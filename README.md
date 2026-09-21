@@ -78,7 +78,7 @@ plugin works there, the command to manage it does not.
 | Surface | Plugin (tools + hooks) | `/plugin` | How to install |
 |---|---|---|---|
 | Claude Code — terminal | yes | yes | `/plugin install kemory@kemory`, then `/reload-plugins` |
-| Claude Code — Desktop app, IDE extensions | yes | **no** | `claude plugin install kemory@kemory` in a shell, then restart the app fully |
+| Claude Code — Desktop app, IDE extensions | yes | **no** | `claude plugin marketplace add SeKondBrainAILabs/kemory-plugin && claude plugin install kemory@kemory` in a shell, then restart the app fully |
 | Claude Desktop (the chat app) | **no plugins, no hooks** | — | `kemory mcp install --host claude-desktop`, or the Kemory connector |
 
 The Desktop app and the IDE extensions read the same `~/.claude/plugins` as the
