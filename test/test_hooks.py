@@ -2271,6 +2271,9 @@ class SkippedServerTest(unittest.TestCase):
                   "KEMORY_URL": self.mine, "KEMORY_API_KEY": "k",
                   # Nothing here should need the network; keep a stray call short.
                   "KEMORY_CONTEXT_TIMEOUT": "2"})
+        # Keep the log-dir lookup inside the fake HOME. Inheriting the real
+        # XDG_CACHE_HOME would let this machine's own logs answer the test.
+        e.pop("XDG_CACHE_HOME", None)
         e.update(extra)
         return e
 
@@ -2325,6 +2328,27 @@ class SkippedServerTest(unittest.TestCase):
         out = self.status().stdout
         self.assertIn("claude-cli-nodejs", out)
         self.assertIn("FAILED", out)
+
+    def test_status_finds_the_real_log_directory_on_this_machine(self):
+        # Shown only when it exists on disk.
+        log = (pathlib.Path(self.home) / ".cache" / "claude-cli-nodejs"
+               / "-some-other-project" / "mcp-logs-plugin-kemory-kemory")
+        log.mkdir(parents=True)
+        self.write_cache(age_seconds=120)
+        self.assertIn(str(log), self.status().stdout)
+
+    def test_status_never_prints_a_platform_specific_guess(self):
+        """The first version hardcoded ~/Library/Caches, which is macOS only.
+
+        On Linux the logs are under $XDG_CACHE_HOME or ~/.cache, so that line
+        sent half the users to a directory that does not exist -- in a tone
+        that reads as authoritative. With no log dir found, say where to look
+        without naming a path that may be wrong.
+        """
+        self.write_cache(age_seconds=120)
+        out = self.status().stdout
+        self.assertNotIn("Library/Caches", out)
+        self.assertIn("cache dir", out)
 
     def test_status_says_the_cache_is_shared(self):
         # The one fact that turns this from "kemory is broken" into "another

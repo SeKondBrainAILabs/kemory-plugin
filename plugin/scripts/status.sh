@@ -132,8 +132,22 @@ if [ -n "$skipped" ]; then
     info "a connect failure for '$skipped_key' was cached at $when; that window"
     info "has passed, so the host retries on the next launch"
   fi
-  info "the real error is under ~/Library/Caches/claude-cli-nodejs/, in a folder"
-  info "named for the cwd of the session that FAILED — often another project"
+  # Never print a literal cache path: the logs sit under ~/Library/Caches on a
+  # Mac and $XDG_CACHE_HOME (or ~/.cache) everywhere else, so a hardcoded one
+  # sends half the users to a directory that does not exist — and does it in a
+  # tone that sounds authoritative. Show what is actually on this disk, and say
+  # nothing rather than guess.
+  log_dir="$(kemory_mcp_log_dir "$skipped_key")"
+  if [ -n "$log_dir" ]; then
+    info "the real error is in the host's log for this server:"
+    info "$log_dir"
+    info "that folder is named for the cwd of the session that FAILED, so it is"
+    info "often another project — this one may have no log at all"
+  else
+    info "the real error is in the host's MCP log for this server, under"
+    info "claude-cli-nodejs in your cache dir, in a folder named for the cwd of"
+    info "the session that FAILED — often a different project"
+  fi
 fi
 
 if [ -n "${KEMORY_BASE_URL:-}" ]; then

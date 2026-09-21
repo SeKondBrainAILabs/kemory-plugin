@@ -464,3 +464,51 @@ if best is not None:
     print(f"{best[0]}\t{int(best[1])}")
 PY
 }
+
+# Locate the host's per-cwd MCP log directory for a cache key, on THIS machine.
+#
+# Printing a literal path is how the first version of the skip report shipped a
+# macOS-only instruction: the logs live under ~/Library/Caches on a Mac and
+# under $XDG_CACHE_HOME (or ~/.cache) everywhere else, so half the users would
+# have been sent to a directory that does not exist. Worse than saying nothing,
+# because it looks authoritative.
+#
+# The directory is named for the cwd of the session that FAILED, which is
+# routinely a different project, so we cannot compute it from here -- we look
+# for what is actually on disk and take the most recently written match.
+#
+# Echoes an existing directory, or nothing when none is found (no python3, a
+# host that stores logs elsewhere, or logs that have been cleaned up).
+kemory_mcp_log_dir() {
+  command -v python3 >/dev/null 2>&1 || return 0
+  KEMORY_LOG_KEY="${1:-}" python3 - <<'PY' 2>/dev/null
+import glob, os
+
+key = os.environ.get("KEMORY_LOG_KEY", "")
+if not key:
+    raise SystemExit(0)
+
+# The host slugifies the cache key into the directory name.
+slug = "".join(c if c.isalnum() else "-" for c in key)
+
+roots = [
+    os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache"),
+    os.path.expanduser("~/Library/Caches"),
+]
+
+best = None
+for root in roots:
+    for path in glob.glob(os.path.join(root, "claude-cli-nodejs", "*", f"mcp-logs-{slug}")):
+        if not os.path.isdir(path):
+            continue
+        try:
+            when = os.path.getmtime(path)
+        except OSError:
+            continue
+        if best is None or when > best[1]:
+            best = (path, when)
+
+if best is not None:
+    print(best[0])
+PY
+}

@@ -29,6 +29,12 @@ All notable changes to this project are documented here. This project follows
   because a launch really did exceed 30s, so clearing it on every session start
   trades one skipped session for a 30s stall in all of them. Startup time is a
   separate problem from reporting it.
+- The log directory is located on disk rather than printed as a literal path.
+  Claude Code keeps it under `~/Library/Caches` on macOS and `$XDG_CACHE_HOME`
+  (or `~/.cache`) elsewhere, so a hardcoded path would send everyone not on a
+  Mac to a directory that does not exist, in a tone that reads as
+  authoritative. When none is found the report says where to look without
+  naming a path that might be wrong.
 - Nothing is reported while the plugin is deliberately standing down for a
   duplicate server. That stand-down is an intentional exit 1, and treating a
   host that caches it as a fault would raise an alarm on a machine configured
