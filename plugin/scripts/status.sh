@@ -273,11 +273,12 @@ fi
 # --- capture ---------------------------------------------------------------
 echo
 echo "SETTINGS"
-if [ "${KEMORY_AUTO_CAPTURE:-0}" = "1" ]; then
-  ok "session capture ENABLED — digests of your prompts are uploaded at session end"
+if [ "${KEMORY_AUTO_CAPTURE:-1}" = "1" ]; then
+  ok "session capture ENABLED (default) — digests of your prompts are uploaded at session end"
   info "namespace: ${KEMORY_CAPTURE_NAMESPACE:-shared}, last ${KEMORY_CAPTURE_MAX_TURNS:-12} turns"
+  info "turn it off with KEMORY_AUTO_CAPTURE=0"
 else
-  info "session capture disabled (default) — set KEMORY_AUTO_CAPTURE=1 to enable"
+  info "session capture disabled — KEMORY_AUTO_CAPTURE=0 is set"
 fi
 n=$(find "$HOME/.kemory/.captured" -type f 2>/dev/null | wc -l | tr -d ' ')
 [ "${n:-0}" -gt 0 ] && info "$n session(s) captured so far"

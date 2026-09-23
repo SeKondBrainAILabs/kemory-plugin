@@ -182,12 +182,19 @@ class HookTest(unittest.TestCase):
         return str(p)
 
     # --- capture ----------------------------------------------------------
-    def test_capture_disabled_by_default(self):
+    def test_capture_runs_by_default(self):
+        self.run_script("capture.sh",
+                        {"session_id": "s", "transcript_path": self.transcript("hi there")},
+                        KEMORY_API_KEY="k")
+        self.assertEqual(len(Recorder.posts), 1,
+                         "capture is on by default; only KEMORY_AUTO_CAPTURE=0 stops it")
+
+    def test_capture_opted_out_by_zero(self):
         r = self.run_script("capture.sh",
-                            {"session_id": "s", "transcript_path": self.transcript("hi")},
-                            KEMORY_API_KEY="k")
+                            {"session_id": "s", "transcript_path": self.transcript("hi there")},
+                            KEMORY_API_KEY="k", KEMORY_AUTO_CAPTURE="0")
         self.assertEqual(r.stdout, "")
-        self.assertEqual(len(Recorder.posts), 0, "capture must be opt-in")
+        self.assertEqual(len(Recorder.posts), 0, "KEMORY_AUTO_CAPTURE=0 must opt out")
 
     def test_capture_uploads_when_enabled(self):
         self.run_script("capture.sh",
@@ -319,9 +326,13 @@ class HookTest(unittest.TestCase):
         self.assertIn("CLAUDE.md", json.loads(r.stdout).get("systemMessage", ""))
 
     def test_no_notice_without_a_pasted_instruction(self):
+        # KEMORY_AUTO_CAPTURE is set so the 0.8.0 capture-default notice, which
+        # fires once on any install that never chose, cannot be mistaken for a
+        # paste notice. This test is about the paste hint and nothing else.
         self._claude_md("# Project notes\nRun the tests with pytest.\n")
         Recorder.get_payload = {"namespaces": []}
-        self.assertNotIn("systemMessage", self._start())
+        self.assertNotIn("CLAUDE.md",
+                         self._start(KEMORY_AUTO_CAPTURE="1").get("systemMessage", ""))
 
     def test_notice_is_weekly_not_every_session(self):
         self._claude_md(self.PASTED)
@@ -681,6 +692,40 @@ class HookTest(unittest.TestCase):
         r = self.run_script("session-start.sh", {}, KEMORY_API_KEY="k", KEMORY_CONTEXT="0")
         self.assertEqual(r.stdout.strip(), "")
 
+    # --- capture-default notice (0.8.0) -----------------------------------
+    # Capture used to be opt-in. An install that predates 0.8.0 was not
+    # capturing and, after an update, silently would be — so the flip has to
+    # announce itself to whoever never made the choice.
+    def test_capture_default_notice_shown_once_then_quiet(self):
+        first = self.run_script("session-start.sh", {}, KEMORY_API_KEY="k")
+        self.assertIn("session capture is on by default",
+                      json.loads(first.stdout).get("systemMessage", ""))
+        second = self.run_script("session-start.sh", {}, KEMORY_API_KEY="k")
+        self.assertNotIn("session capture is on by default",
+                         json.loads(second.stdout).get("systemMessage", ""),
+                         "one piece of news, not a nag")
+
+    def test_capture_default_notice_names_the_opt_out(self):
+        r = self.run_script("session-start.sh", {}, KEMORY_API_KEY="k")
+        msg = json.loads(r.stdout)["systemMessage"]
+        self.assertIn("KEMORY_AUTO_CAPTURE=0", msg,
+                      "telling someone what changed without how to undo it is half a notice")
+
+    def test_capture_default_notice_silent_when_set_either_way(self):
+        for value in ("0", "1"):
+            with self.subTest(KEMORY_AUTO_CAPTURE=value):
+                r = self.run_script("session-start.sh", {}, KEMORY_API_KEY="k",
+                                    KEMORY_AUTO_CAPTURE=value)
+                self.assertNotIn("session capture is on by default",
+                                 json.loads(r.stdout).get("systemMessage", ""),
+                                 "an explicit setting is their decision, not our default")
+
+    def test_capture_default_notice_respects_quiet_setup(self):
+        r = self.run_script("session-start.sh", {}, KEMORY_API_KEY="k",
+                            KEMORY_QUIET_SETUP="1")
+        self.assertNotIn("session capture is on by default",
+                         json.loads(r.stdout).get("systemMessage", ""))
+
     def test_setup_hint_shown_once_then_quiet(self):
         first = self.run_script("session-start.sh", {}, KEMORY_URL="")
         self.assertIn("systemMessage", first.stdout)
@@ -1026,11 +1071,20 @@ class HookTest(unittest.TestCase):
         self.stop(self.transcript("one", "two", "three"))
         self.assertEqual(len(Recorder.posts), 1)
 
-    def test_capture_stop_is_still_opt_in(self):
+    def test_capture_stop_runs_by_default(self):
+        self.run_script("capture.sh",
+                        {"session_id": "s", "hook_event_name": "Stop",
+                         "stop_hook_active": False,
+                         "transcript_path": self.transcript("a", "b", "c")},
+                        KEMORY_API_KEY="k")
+        self.assertEqual(len(Recorder.posts), 1)
+
+    def test_capture_stop_opted_out_by_zero(self):
         r = self.run_script("capture.sh",
                             {"session_id": "s", "hook_event_name": "Stop",
+                             "stop_hook_active": False,
                              "transcript_path": self.transcript("a", "b", "c")},
-                            KEMORY_API_KEY="k")
+                            KEMORY_API_KEY="k", KEMORY_AUTO_CAPTURE="0")
         self.assertEqual(r.stdout, "")
         self.assertEqual(Recorder.posts, [])
 
@@ -2270,7 +2324,13 @@ class SkippedServerTest(unittest.TestCase):
         e.update({"HOME": self.home, "CLAUDE_PROJECT_DIR": self.home,
                   "KEMORY_URL": self.mine, "KEMORY_API_KEY": "k",
                   # Nothing here should need the network; keep a stray call short.
-                  "KEMORY_CONTEXT_TIMEOUT": "2"})
+                  "KEMORY_CONTEXT_TIMEOUT": "2",
+                  # Set explicitly so the one-time 0.8.0 capture-default notice
+                  # never fires here. These tests assert on the skip notice and
+                  # several of them assert total silence; an unrelated notice
+                  # sharing the systemMessage slot would fail them for the
+                  # wrong reason.
+                  "KEMORY_AUTO_CAPTURE": "1"})
         # Keep the log-dir lookup inside the fake HOME. Inheriting the real
         # XDG_CACHE_HOME would let this machine's own logs answer the test.
         e.pop("XDG_CACHE_HOME", None)

@@ -86,5 +86,6 @@ Every hook is best-effort by design: no credential, an unreachable server, or a
 malformed transcript all exit cleanly. Nothing breaks, but nothing happens
 either — so a quiet session is a setup problem, not a healthy one.
 
-Before enabling session capture (`KEMORY_AUTO_CAPTURE=1`), read the Privacy
-Policy in the plugin README. It uploads your own turns.
+Session capture is on by default and uploads your own turns. If the user asks
+what leaves their machine, or wants it off, point them at the Privacy Policy in
+the plugin README and at `KEMORY_AUTO_CAPTURE=0`.

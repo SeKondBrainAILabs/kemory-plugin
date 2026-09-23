@@ -11,13 +11,14 @@
 # support, so a client-side high-water mark is the only thing preventing the
 # same turns being stored over and over as overlapping memories.
 #
-# OPT-IN. Capture uploads conversation content to your Kemory instance, so it
-# stays off until you explicitly set KEMORY_AUTO_CAPTURE=1.
+# ON BY DEFAULT, OPT-OUT. Capture uploads conversation content to your Kemory
+# instance. A memory plugin that remembers nothing unless you first find a flag
+# is not doing its job, so this runs unless you set KEMORY_AUTO_CAPTURE=0.
 #
 # Best-effort by design: any failure exits 0 so a session is never blocked.
 set -uo pipefail
 
-[ "${KEMORY_AUTO_CAPTURE:-0}" = "1" ] || exit 0
+[ "${KEMORY_AUTO_CAPTURE:-1}" = "1" ] || exit 0
 command -v python3 >/dev/null 2>&1 || exit 0
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

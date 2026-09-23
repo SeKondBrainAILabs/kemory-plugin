@@ -172,6 +172,26 @@ if [ -n "$KEMORY_STALE" ]; then
   KEMORY_VERSION_NOTICE="Kemory plugin: version ${KEMORY_STALE%% *} installed, ${KEMORY_STALE##* } available. Hooks are where this plugin's behaviour lives, so an old install quietly runs old behaviour. Update with /plugin update kemory@kemory, then restart. Silence this with KEMORY_QUIET_SETUP=1."
 fi
 
+# Session capture became the default in 0.8.0. An install that predates it was
+# not capturing and, after an update, silently would be — so say it once, to
+# whoever never made the choice themselves. Someone who has set
+# KEMORY_AUTO_CAPTURE either way already knows; they are told nothing.
+#
+# The stamp is permanent, not throttled: this is one piece of news, not a nag.
+capture_default_notice() {
+  [ "${KEMORY_QUIET_SETUP:-0}" = "1" ] && return 0
+  # Explicitly set, either way? Then it is their decision, not our default.
+  [ -n "${KEMORY_AUTO_CAPTURE:-}" ] && return 0
+
+  local stamp="$HOME/.kemory/.capture-default"
+  [ -f "$stamp" ] && return 0
+  mkdir -p "$(dirname "$stamp")" 2>/dev/null && touch "$stamp" 2>/dev/null
+
+  printf '%s' "Kemory plugin: session capture is on by default from 0.8.0. At the end of a session it stores a redacted digest of your own prompts — last 12 turns, 8000 characters — in your vault. Turn it off with KEMORY_AUTO_CAPTURE=0; see PRIVACY.md for exactly what is sent. This is said once."
+}
+
+KEMORY_CAPTURE_NOTICE="$(capture_default_notice)"
+
 # One systemMessage slot, so anything with something to say shares it.
 KEMORY_NOTICE=""
 if [ -n "$KEMORY_PASTED_AT" ]; then
@@ -186,7 +206,16 @@ $KEMORY_VERSION_NOTICE"
     KEMORY_NOTICE="$KEMORY_VERSION_NOTICE"
   fi
 fi
-export KEMORY_VERSION_NOTICE KEMORY_NOTICE
+if [ -n "$KEMORY_CAPTURE_NOTICE" ]; then
+  if [ -n "$KEMORY_NOTICE" ]; then
+    KEMORY_NOTICE="$KEMORY_NOTICE
+
+$KEMORY_CAPTURE_NOTICE"
+  else
+    KEMORY_NOTICE="$KEMORY_CAPTURE_NOTICE"
+  fi
+fi
+export KEMORY_VERSION_NOTICE KEMORY_CAPTURE_NOTICE KEMORY_NOTICE
 
 
 emit_setup_hint() {

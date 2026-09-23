@@ -3,6 +3,38 @@
 All notable changes to this project are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.8.0] — 2026-09-23
+
+### Changed
+- **Session capture is now on by default; set `KEMORY_AUTO_CAPTURE=0` to opt
+  out.** It shipped opt-in, and opt-in was the wrong shape for it: a memory
+  plugin whose memory is off until you go looking for a flag spends every
+  session rebuilding context it could have had. The capture itself is unchanged
+  — same bounded digest of your own prompts, last 12 turns and 8000 characters,
+  same redaction pass, same namespace — only the default moved.
+
+  Everything that describes the default moved with it: the feature list and hook
+  table in both READMEs, `PRIVACY.md`, `SECURITY.md`, the setup skill, and what
+  `/kemory:status` prints under SETTINGS. `PRIVACY.md` had also been telling
+  readers that `KEMORY_AUTO_CAPTURE=0` was "already the default" while the code
+  defaulted it off, which is now simply true rather than accidentally right.
+
+### Added
+- **A one-time notice, so the flip is not silent.** `SessionStart` says once,
+  on any install that has never set `KEMORY_AUTO_CAPTURE` either way, that
+  capture is on, what it sends, and that `KEMORY_AUTO_CAPTURE=0` turns it off.
+  Someone who already set the variable is told nothing — that is their decision,
+  not our default. Stamped at `~/.kemory/.capture-default` and never repeated:
+  one piece of news, not a nag. `KEMORY_QUIET_SETUP=1` suppresses it like the
+  others.
+
+### Upgrading
+- **This changes what leaves your machine.** An existing install that never set
+  the variable was not capturing; after this update it will, and will say so
+  once. If you want the old behaviour, set `KEMORY_AUTO_CAPTURE=0` before
+  restarting Claude Code. Nothing already stored is affected, and
+  `/kemory:status` always states which way the setting currently sits.
+
 ## [0.7.5] — 2026-09-23
 
 ### Fixed
