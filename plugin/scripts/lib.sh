@@ -283,7 +283,8 @@ PY
 #
 # Resolves each entry the way the thing that runs it would:
 #   * an http/sse entry          -> the host of its own url
-#   * `kemory [--env X] mcp serve` -> the host in ~/.kemory/credentials-X
+#   * `kemory [--env X] mcp serve` -> the host in ~/.kemory/credentials-X,
+#                                     if that command is on this process's PATH
 # An entry whose endpoint cannot be worked out is SKIPPED, never guessed at:
 # standing down wrongly costs the user their tools.
 #
@@ -299,7 +300,7 @@ kemory_find_duplicate_server() {
   [ -n "${KEMORY_BASE_URL:-}" ] || return 0
   command -v python3 >/dev/null 2>&1 || return 0
   KEMORY_MINE="$KEMORY_BASE_URL" python3 - <<'PY' 2>/dev/null
-import json, os, urllib.parse
+import json, os, shutil, urllib.parse
 
 MINE = urllib.parse.urlparse(os.environ["KEMORY_MINE"]).netloc.lower()
 if not MINE:
@@ -353,6 +354,14 @@ def endpoint_of(cfg):
     command = str(cfg.get("command") or "")
     args = [str(a) for a in (cfg.get("args") or [])]
     if os.path.basename(command) == "kemory" and "serve" in args:
+        # The host launches this entry with the PATH it gave this process, so a
+        # command we cannot find here cannot start there either. `kemory mcp
+        # install` writes the bare name, and a desktop app's PATH lacks a
+        # Homebrew prefix such as ~/homebrew/bin; yielding to that entry left
+        # the session with no server at all.
+        env = cfg.get("env") if isinstance(cfg.get("env"), dict) else {}
+        if not shutil.which(command, path=env.get("PATH") or os.environ.get("PATH")):
+            return ""
         return cli_host(args)
     return ""
 

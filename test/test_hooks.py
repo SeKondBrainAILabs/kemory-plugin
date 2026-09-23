@@ -2030,6 +2030,15 @@ class DuplicateServerTest(unittest.TestCase):
         return subprocess.run([str(SCRIPTS / "mcp.sh")], input="", text=True,
                               capture_output=True, env=self.env(**extra))
 
+    def fake_kemory_dir(self):
+        """A directory holding a `kemory` executable, for PATH-lookup cases."""
+        d = pathlib.Path(self.home) / "fakebin"
+        d.mkdir(exist_ok=True)
+        f = d / "kemory"
+        f.write_text("#!/bin/sh\nexit 0\n")
+        f.chmod(0o755)
+        return str(d)
+
     def assertStoodDown(self, r, named):
         self.assertEqual(r.returncode, 1)
         self.assertIn("standing down", r.stderr)
@@ -2054,6 +2063,14 @@ class DuplicateServerTest(unittest.TestCase):
         self.write_config({"kemory": {"command": "kemory",
                                       "args": ["--env", "prod", "mcp", "serve"],
                                       "env": {}}})
+        path = f"{self.fake_kemory_dir()}:{self.env()['PATH']}"
+        self.assertStoodDown(self.launch(PATH=path), "kemory")
+
+    def test_yields_when_the_entry_sets_its_own_path(self):
+        self.write_cli_credentials(self.mine, env="prod")
+        self.write_config({"kemory": {"command": "kemory",
+                                      "args": ["--env", "prod", "mcp", "serve"],
+                                      "env": {"PATH": self.fake_kemory_dir()}}})
         self.assertStoodDown(self.launch(), "kemory")
 
     def test_yields_to_an_entry_that_is_not_called_kemory(self):
@@ -2109,6 +2126,16 @@ class DuplicateServerTest(unittest.TestCase):
     def test_does_not_yield_when_the_cli_entry_has_no_credentials_to_resolve(self):
         self.write_config({"kemory": {"command": "kemory",
                                       "args": ["--env", "prod", "mcp", "serve"]}})
+        self.assertServed(self.launch())
+
+    def test_does_not_yield_to_a_cli_entry_whose_command_is_not_on_path(self):
+        # What `kemory mcp install` writes is the bare name. A desktop app's
+        # PATH lacks a Homebrew prefix such as ~/homebrew/bin, so the host
+        # cannot start that entry, and yielding to it left no server at all.
+        self.write_cli_credentials(self.mine, env="prod")
+        self.write_config({"kemory": {"command": "kemory",
+                                      "args": ["--env", "prod", "mcp", "serve"],
+                                      "env": {}}})
         self.assertServed(self.launch())
 
     def test_does_not_yield_to_another_projects_entry(self):
