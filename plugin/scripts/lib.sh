@@ -398,3 +398,117 @@ for path in candidates:
         raise SystemExit(0)
 PY
 }
+
+# Ask the HOST whether it has switched our MCP server off.
+#
+# Claude Code gives a server 30s to answer `initialize`, and on a timeout it
+# records the failure in ~/.claude/mcp-needs-auth-cache.json and SKIPS the
+# server for the next 15 minutes. That file is global and shared by every
+# session on the machine, so one slow launch in one project takes the memory
+# tools away from every session started afterwards -- including sessions whose
+# own launch would have succeeded in under a second. The user sees
+# "Skipping connection (recent failure cached...)" and nothing else.
+#
+# Without this, /kemory:status resolves a credential, reaches the API, finds no
+# duplicate, and reports the tools as fine while the host is not running them.
+# That is the same lie the TOOLS section was already fixed for once (see
+# status.sh) arriving through a different door: we were reporting whether the
+# server COULD start, never whether the host intends to start it.
+#
+# Read-only, and deliberately so. Deleting the entry from a hook is tempting
+# and wrong twice over: the file is the host's own undocumented state, global
+# and written by concurrent sessions with no lock we can take, so a
+# read-modify-write can drop another server's entry; and the entry is there
+# because a launch really did exceed 30s, so clearing it every session start
+# just moves the cost from one skipped session to a 30s stall in all of them.
+# Saying what happened is the fix. Making it not happen is a startup-time
+# problem, not a status problem.
+#
+# Matches any kemory entry rather than the exact bundled key: the same cache
+# holds host-config and connector entries, and a rigid key match that silently
+# misses is precisely the failure mode being fixed here.
+#
+# Echoes "<cache key>\t<epoch seconds>" for the most recent hit; silent
+# otherwise, including when the file is absent, unreadable or not JSON.
+kemory_mcp_skipped_at() {
+  command -v python3 >/dev/null 2>&1 || return 0
+  python3 - <<'PY' 2>/dev/null
+import json, os
+
+path = os.path.expanduser("~/.claude/mcp-needs-auth-cache.json")
+try:
+    with open(path) as fh:
+        data = json.load(fh)
+except Exception:
+    raise SystemExit(0)
+if not isinstance(data, dict):
+    raise SystemExit(0)
+
+best = None
+for key, entry in data.items():
+    if "kemory" not in str(key).lower():
+        continue
+    if not isinstance(entry, dict):
+        continue
+    stamp = entry.get("timestamp")
+    if not isinstance(stamp, (int, float)):
+        continue
+    # The host writes milliseconds. Guard the units rather than trusting them:
+    # a seconds-valued entry read as milliseconds dates to 1970 and would be
+    # reported as an ancient failure instead of a current one.
+    secs = stamp / 1000.0 if stamp > 1e11 else float(stamp)
+    if best is None or secs > best[1]:
+        best = (str(key), secs)
+
+if best is not None:
+    print(f"{best[0]}\t{int(best[1])}")
+PY
+}
+
+# Locate the host's per-cwd MCP log directory for a cache key, on THIS machine.
+#
+# Printing a literal path is how the first version of the skip report shipped a
+# macOS-only instruction: the logs live under ~/Library/Caches on a Mac and
+# under $XDG_CACHE_HOME (or ~/.cache) everywhere else, so half the users would
+# have been sent to a directory that does not exist. Worse than saying nothing,
+# because it looks authoritative.
+#
+# The directory is named for the cwd of the session that FAILED, which is
+# routinely a different project, so we cannot compute it from here -- we look
+# for what is actually on disk and take the most recently written match.
+#
+# Echoes an existing directory, or nothing when none is found (no python3, a
+# host that stores logs elsewhere, or logs that have been cleaned up).
+kemory_mcp_log_dir() {
+  command -v python3 >/dev/null 2>&1 || return 0
+  KEMORY_LOG_KEY="${1:-}" python3 - <<'PY' 2>/dev/null
+import glob, os
+
+key = os.environ.get("KEMORY_LOG_KEY", "")
+if not key:
+    raise SystemExit(0)
+
+# The host slugifies the cache key into the directory name.
+slug = "".join(c if c.isalnum() else "-" for c in key)
+
+roots = [
+    os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache"),
+    os.path.expanduser("~/Library/Caches"),
+]
+
+best = None
+for root in roots:
+    for path in glob.glob(os.path.join(root, "claude-cli-nodejs", "*", f"mcp-logs-{slug}")):
+        if not os.path.isdir(path):
+            continue
+        try:
+            when = os.path.getmtime(path)
+        except OSError:
+            continue
+        if best is None or when > best[1]:
+            best = (path, when)
+
+if best is not None:
+    print(best[0])
+PY
+}
