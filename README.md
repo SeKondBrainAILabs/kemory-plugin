@@ -26,8 +26,8 @@ turn on.
 - **Context injection** — your namespace summaries load at session start
 - **Rate reminder** — the agent rates the memories it used, so retrieval keeps
   improving
-- **Session capture** — *opt-in.* A bounded, redacted digest of what the
-  session was about, stored at the end
+- **Session capture** — *on by default, `KEMORY_AUTO_CAPTURE=0` to opt out.*
+  A bounded, redacted digest of what the session was about, stored at the end
 - **`/kemory:status`** — one command that says what is and is not working
 
 ## Install
@@ -111,7 +111,7 @@ the version you are on, and [CHANGELOG.md](CHANGELOG.md) says what moved.
 | rate reminder | `PostToolUse` | Prompts the agent to rate the memories it actually used | Nothing | on |
 | consolidate reminder | `SessionStart` after compaction | Prompts the agent to store facts that would otherwise survive only as a summary | Nothing | on |
 | store nudge | `Stop` | When the turn settled something durable and no Kemory write happened, asks for it before the turn ends | Nothing | **off** |
-| session capture | `Stop`, `SessionEnd` | Stores a redacted digest of your own prompts: last 12 turns, 8000 characters | Your prompts, redacted | **off** |
+| session capture | `Stop`, `SessionEnd` | Stores a redacted digest of your own prompts: last 12 turns, 8000 characters | Your prompts, redacted | on |
 
 If you pasted the instruction into `CLAUDE.md` before the plugin shipped one,
 you can delete it — the plugin says so once a week until you do. Keeping both
@@ -139,7 +139,7 @@ or `#`.
 
 ```bash
 export KEMORY_PROMPT_RECALL=0   # stop sending prompt text
-export KEMORY_AUTO_CAPTURE=1    # turn capture on (off by default)
+export KEMORY_AUTO_CAPTURE=0    # turn capture off (on by default)
 export KEMORY_STORE_NUDGE=1     # turn the store nudge on (off by default)
 ```
 
@@ -166,7 +166,7 @@ redaction does and does not guarantee.
 ```
 
 Validates manifests, shell syntax, executable bits, plugin source paths, hook
-script references, and that capture stays off by default. CI runs the same
+script references, and which way the capture default sits. CI runs the same
 script plus shellcheck. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ```

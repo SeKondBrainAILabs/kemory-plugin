@@ -7,10 +7,11 @@ than opening a public issue. We aim to acknowledge within 3 business days.
 
 ## Scope notes for this plugin
 
-**Session capture is opt-in and off by default.** When enabled with
-`KEMORY_AUTO_CAPTURE=1`, the plugin sends a bounded digest of your own
+**Session capture is on by default and opt-out.** Unless you set
+`KEMORY_AUTO_CAPTURE=0`, the plugin sends a bounded digest of your own
 prompts to the Kemory instance you have configured. Review
-[plugin/README.md](plugin/README.md) before enabling it.
+[plugin/README.md](plugin/README.md) and [PRIVACY.md](PRIVACY.md) for what
+that covers, and set the variable to `0` if you do not want it.
 
 **Redaction is best-effort.** `scripts/capture.sh` strips common secret
 shapes (bearer tokens, `api_key=`/`password=` assignments, `sk-`, `gh*_`,

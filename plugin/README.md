@@ -11,7 +11,7 @@ Hooks and a skill that make Claude Code use Kemory memory well.
 | `recall-approve.sh` | `PreToolUse` on Kemory tools | Auto-approves **read-only** tools so recall costs no permission prompt. Writes still ask, every time |
 | `rate-reminder.sh` | `PostToolUse` on any Kemory recall tool | Reminds the agent to rate memories it actually used, so recall quality improves over time. Fires only when the response is rateable — it carries a `recall_id` or a non-empty result list |
 | `session-start.sh` | `SessionStart` with `source=compact` | Reminds the agent to consolidate what the pre-compaction context held. Deliberately not `PreCompact`: that event rejects `additionalContext`, and fires as compaction begins so the model gets no turn to act |
-| `capture.sh` | `Stop`, `SessionEnd` | **Opt-in.** Stores new turns as redacted episodic memories as the session goes, so a killed session still leaves its work behind |
+| `capture.sh` | `Stop`, `SessionEnd` | **On by default** (`KEMORY_AUTO_CAPTURE=0` opts out). Stores new turns as redacted episodic memories as the session goes, so a killed session still leaves its work behind |
 
 Plus:
 
@@ -118,21 +118,26 @@ rather than an invocation id, hook-injected memories carry no `recall_id`. The
 agent is told to rate them by `memory_id`; they will not appear in recall
 *coverage* metrics, which join on recall ids.
 
-## Automatic session capture (opt-in)
+## Automatic session capture (on by default)
 
-Capture is **off** unless you set it explicitly, because it uploads
-conversation content to your kemory instance:
+Capture runs unless you turn it off. It uploads a bounded, redacted digest of
+your own prompts to the kemory instance you configured — a memory plugin that
+remembers nothing until you find a flag is not doing its job. Digests land in
+`user:sessions` as `user-private`, so turning capture on does not put your
+sessions in front of your team; `KEMORY_CAPTURE_NAMESPACE` and
+`KEMORY_CAPTURE_VISIBILITY` move them if that is what you want. To opt out:
 
 ```bash
-export KEMORY_AUTO_CAPTURE=1
+export KEMORY_AUTO_CAPTURE=0
 ```
 
 | Variable | Default | Meaning |
 |----------|---------|---------|
 | `KEMORY_STORE_NUDGE` | `0` | Set to `1` to ask for a write when a turn settled something and stored nothing |
 | `KEMORY_STORE_NUDGE_SIGNALS` | — | Extra `\|`-separated regexes that mark a turn as worth storing, added to the built-in set |
-| `KEMORY_AUTO_CAPTURE` | `0` | Set to `1` to enable capture |
-| `KEMORY_CAPTURE_NAMESPACE` | `shared` | Namespace to write digests to |
+| `KEMORY_AUTO_CAPTURE` | `1` | Set to `0` to disable capture |
+| `KEMORY_CAPTURE_NAMESPACE` | `user:sessions` | Namespace to write digests to |
+| `KEMORY_CAPTURE_VISIBILITY` | `user-private` | Visibility of stored digests: `user-private`, `agent-private`, `team`, `org-public` |
 | `KEMORY_CAPTURE_MAX_TURNS` | `12` | Maximum user turns in a single stored memory |
 | `KEMORY_CAPTURE_MIN_NEW_TURNS` | `3` | New turns required before a mid-session `Stop` stores anything; `SessionEnd` flushes any remainder |
 | `KEMORY_CAPTURE_SOURCE` | `claude-code` | Value recorded in the memory's `metadata.source` |
@@ -171,9 +176,9 @@ malformed transcript all exit cleanly and never block a session.
 
 Everything this plugin sends goes to the Kemory instance you configured and
 nowhere else — no telemetry, no analytics, no third party. Two hooks transmit
-anything at all: **prompt recall**, which is on by default and sends the text
-of your prompt as a search query, and **session capture**, which is off by
-default and sends your own turns. Both are switched off with
+anything at all: **prompt recall**, which sends the text of your prompt as a
+search query, and **session capture**, which sends a redacted digest of your
+own turns. Both are on by default, and both are switched off with
 `KEMORY_PROMPT_RECALL=0` and `KEMORY_AUTO_CAPTURE=0`. Context injection sends
 only your credential; the recall-approval and rate-reminder hooks make no
 network calls at all.
