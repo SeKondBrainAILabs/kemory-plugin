@@ -19,7 +19,7 @@ analytics and no third-party endpoint of its own.
 | recall approval | `PreToolUse` | Nothing — runs entirely locally | on |
 | rate reminder | `PostToolUse` | Nothing — runs entirely locally | on |
 | store nudge | `Stop` | Nothing — reads the transcript on your machine and prints guidance | **off** |
-| session capture | `Stop`, `SessionEnd` | Your own prompts: last 12 turns, 8000 characters max, redacted | on |
+| session capture | `Stop`, `SessionEnd` | Your own prompts: last 12 turns, 8000 characters max, redacted, stored `user-private` in `user:sessions` | on |
 
 Prompt recall skips prompts under 12 characters and any prompt starting with
 `/`, `!` or `#`, so slash commands are never sent. Separately, when a stored

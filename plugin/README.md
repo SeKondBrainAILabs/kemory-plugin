@@ -122,7 +122,10 @@ agent is told to rate them by `memory_id`; they will not appear in recall
 
 Capture runs unless you turn it off. It uploads a bounded, redacted digest of
 your own prompts to the kemory instance you configured — a memory plugin that
-remembers nothing until you find a flag is not doing its job. To opt out:
+remembers nothing until you find a flag is not doing its job. Digests land in
+`user:sessions` as `user-private`, so turning capture on does not put your
+sessions in front of your team; `KEMORY_CAPTURE_NAMESPACE` and
+`KEMORY_CAPTURE_VISIBILITY` move them if that is what you want. To opt out:
 
 ```bash
 export KEMORY_AUTO_CAPTURE=0
@@ -133,7 +136,8 @@ export KEMORY_AUTO_CAPTURE=0
 | `KEMORY_STORE_NUDGE` | `0` | Set to `1` to ask for a write when a turn settled something and stored nothing |
 | `KEMORY_STORE_NUDGE_SIGNALS` | — | Extra `\|`-separated regexes that mark a turn as worth storing, added to the built-in set |
 | `KEMORY_AUTO_CAPTURE` | `1` | Set to `0` to disable capture |
-| `KEMORY_CAPTURE_NAMESPACE` | `shared` | Namespace to write digests to |
+| `KEMORY_CAPTURE_NAMESPACE` | `user:sessions` | Namespace to write digests to |
+| `KEMORY_CAPTURE_VISIBILITY` | `user-private` | Visibility of stored digests: `user-private`, `agent-private`, `team`, `org-public` |
 | `KEMORY_CAPTURE_MAX_TURNS` | `12` | Maximum user turns in a single stored memory |
 | `KEMORY_CAPTURE_MIN_NEW_TURNS` | `3` | New turns required before a mid-session `Stop` stores anything; `SessionEnd` flushes any remainder |
 | `KEMORY_CAPTURE_SOURCE` | `claude-code` | Value recorded in the memory's `metadata.source` |

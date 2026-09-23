@@ -20,6 +20,16 @@ All notable changes to this project are documented here. This project follows
   defaulted it off, which is now simply true rather than accidentally right.
 
 ### Added
+- **Digests now land somewhere private, and say so.** Capture used to write to
+  `shared` and set no `visibility` at all, leaving the destination to whatever
+  the server defaulted to. That was tolerable while capture was opt-in; for a
+  hook that now runs for everyone it is not. Digests default to the
+  `user:sessions` namespace with `visibility: user-private`, both stated in the
+  payload. `KEMORY_CAPTURE_NAMESPACE` and the new `KEMORY_CAPTURE_VISIBILITY`
+  move them deliberately — turning capture on no longer implies putting your
+  sessions in front of your team. Existing digests already in `shared` stay
+  where they are.
+
 - **A one-time notice, so the flip is not silent.** `SessionStart` says once,
   on any install that has never set `KEMORY_AUTO_CAPTURE` either way, that
   capture is on, what it sends, and that `KEMORY_AUTO_CAPTURE=0` turns it off.

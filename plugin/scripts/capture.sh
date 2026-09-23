@@ -33,7 +33,12 @@ export HOOK_INPUT
 export KEMORY_SCRIPT_DIR="$DIR"
 # Importing redact.py must not litter the user's plugin directory.
 export PYTHONDONTWRITEBYTECODE=1
-export KEMORY_NAMESPACE="${KEMORY_CAPTURE_NAMESPACE:-shared}"
+# Session digests are the most incidentally-revealing thing this plugin
+# handles — half-formed debugging, client names, things typed before thinking.
+# Now that capture is on by default they land somewhere private by default too,
+# not in `shared`, whose name reads as team-visible to every engineer who sees
+# it. Set KEMORY_CAPTURE_NAMESPACE to put them somewhere else deliberately.
+export KEMORY_NAMESPACE="${KEMORY_CAPTURE_NAMESPACE:-user:sessions}"
 export KEMORY_MAX_TURNS="${KEMORY_CAPTURE_MAX_TURNS:-12}"
 export KEMORY_MIN_NEW_TURNS="${KEMORY_CAPTURE_MIN_NEW_TURNS:-3}"
 export KEMORY_CAPTURE_SOURCE="${KEMORY_CAPTURE_SOURCE:-claude-code}"
@@ -169,6 +174,10 @@ req = urllib.request.Request(
     data=json.dumps({
         "namespace": os.environ["KEMORY_NAMESPACE"],
         "namespace_tag": "session-capture",
+        # Stated, not inherited. The server has its own default and it is not
+        # this plugin's to assume — least of all for a hook that now runs for
+        # everyone. Override deliberately with KEMORY_CAPTURE_VISIBILITY.
+        "visibility": os.environ.get("KEMORY_CAPTURE_VISIBILITY", "user-private"),
         "content": content,
         "content_type": "text",
         "session_id": session_id,

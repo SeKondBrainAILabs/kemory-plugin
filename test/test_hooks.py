@@ -205,6 +205,29 @@ class HookTest(unittest.TestCase):
         self.assertIn("add retries", body["content"])
         self.assertEqual(body["namespace_tag"], "session-capture")
 
+    def test_capture_lands_private_and_out_of_shared(self):
+        # Session digests are the most incidentally-revealing thing the plugin
+        # handles, and capture is on by default from 0.8.0. Both halves are
+        # stated by the payload rather than inherited from a server default
+        # this plugin does not control.
+        self.run_script("capture.sh",
+                        {"session_id": "s", "transcript_path": self.transcript("add retries")},
+                        KEMORY_API_KEY="k")
+        _, body, _path = Recorder.posts[0]
+        self.assertEqual(body["visibility"], "user-private")
+        self.assertEqual(body["namespace"], "user:sessions")
+        self.assertNotEqual(body["namespace"], "shared",
+                            "a namespace named 'shared' reads as team-visible")
+
+    def test_capture_destination_is_overridable(self):
+        self.run_script("capture.sh",
+                        {"session_id": "s", "transcript_path": self.transcript("add retries")},
+                        KEMORY_API_KEY="k", KEMORY_CAPTURE_NAMESPACE="shared",
+                        KEMORY_CAPTURE_VISIBILITY="team")
+        _, body, _path = Recorder.posts[0]
+        self.assertEqual(body["namespace"], "shared")
+        self.assertEqual(body["visibility"], "team")
+
     def test_capture_dedupes_identical_digest(self):
         t = self.transcript("one task")
         for reason in ("clear", "clear", "exit"):
