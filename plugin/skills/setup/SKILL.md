@@ -68,6 +68,15 @@ the hooks.** They never read MCP config. That is the most common way to end up
 with working `kemory_*` tools and no context injection. `/kemory:status`
 detects it and says so — export the same key as `KEMORY_API_KEY` to fix it.
 
+## Signed in is not the same as connected
+
+A working sign-in proves the hooks work, nothing more. If `/kemory:status`
+reports that the Kemory server has never seen the memory tools connect from
+Claude Code, the setup is NOT done, however healthy the credential lines look:
+the `kemory_*` tools are missing and the dashboard shows Claude Code as not
+connected. Do not tell the user they are already set up. Have them open `/mcp`
+and act on what the kemory entry says there.
+
 ## Confirm, and know what silence means
 
 Re-run `/kemory:status`. From the next session, namespace summaries are

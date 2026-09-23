@@ -287,6 +287,13 @@ PY
 # An entry whose endpoint cannot be worked out is SKIPPED, never guessed at:
 # standing down wrongly costs the user their tools.
 #
+# ONLY configs Claude Code loads for THIS session count: the project's
+# .mcp.json, the user-scope mcpServers in ~/.claude.json, and that file's entry
+# for the current project. Claude Desktop's claude_desktop_config.json belongs
+# to a different app, and another project's entry is not loaded here — standing
+# down for either left Claude Code with no memory tools at all while the hooks
+# kept capturing.
+#
 # Echoes "<server name>\t<config path>" on a match; silent otherwise.
 kemory_find_duplicate_server() {
   [ -n "${KEMORY_BASE_URL:-}" ] || return 0
@@ -298,12 +305,19 @@ MINE = urllib.parse.urlparse(os.environ["KEMORY_MINE"]).netloc.lower()
 if not MINE:
     raise SystemExit(0)
 
+PROJECT = os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
+USER_CONFIG = os.path.expanduser("~/.claude.json")
 candidates = [
-    os.path.join(os.environ.get("CLAUDE_PROJECT_DIR", os.getcwd()), ".mcp.json"),
-    os.path.expanduser("~/.claude.json"),
-    os.path.expanduser("~/.mcp.json"),
-    os.path.expanduser("~/Library/Application Support/Claude/claude_desktop_config.json"),
+    os.path.join(PROJECT, ".mcp.json"),
+    USER_CONFIG,
 ]
+
+
+def same_dir(a, b):
+    try:
+        return os.path.realpath(a) == os.path.realpath(b)
+    except Exception:
+        return False
 
 
 def host_of(url):
@@ -364,12 +378,12 @@ for path in candidates:
     if not isinstance(data, dict):
         continue
     hit = scan(data.get("mcpServers"), path)
-    if not hit:
-        for proj in (data.get("projects") or {}).values():
-            if isinstance(proj, dict):
+    if not hit and path == USER_CONFIG:
+        projects = data.get("projects")
+        for key, proj in (projects.items() if isinstance(projects, dict) else ()):
+            if isinstance(proj, dict) and same_dir(key, PROJECT):
                 hit = scan(proj.get("mcpServers"), path)
-                if hit:
-                    break
+                break
     if hit:
         print(f"{hit[0]}\t{hit[1]}")
         raise SystemExit(0)

@@ -31,6 +31,8 @@ class Recorder(http.server.BaseHTTPRequestHandler):
     search_status: int = 200
     memories_status: int = 201
     get_status: int = 200
+    # Body for GET /api/v1/agents; None serves get_payload like any other GET.
+    agents_payload = None
     # Keycloak refresh response, and its status.
     token_payload: dict = {"access_token": "fresh-token", "expires_in": 3600}
     token_status: int = 200
@@ -69,7 +71,10 @@ class Recorder(http.server.BaseHTTPRequestHandler):
             return
         self.send_header("Content-Type", "application/json")
         self.end_headers()
-        self.wfile.write(json.dumps(Recorder.get_payload).encode())
+        body = Recorder.get_payload
+        if self.path.startswith("/api/v1/agents") and Recorder.agents_payload is not None:
+            body = Recorder.agents_payload
+        self.wfile.write(json.dumps(body).encode())
 
     def log_message(self, *a):
         pass
@@ -127,6 +132,7 @@ class HookTest(unittest.TestCase):
         Recorder.search_status = 200
         Recorder.memories_status = 201
         Recorder.get_status = 200
+        Recorder.agents_payload = None
         Recorder.token_payload = {"access_token": "fresh-token",
                                   "expires_in": 3600}
         Recorder.token_status = 200
@@ -1102,6 +1108,72 @@ class HookTest(unittest.TestCase):
         self.assertIn("HTTP 200", r.stdout)
         self.assertNotIn("not the API", r.stdout)
 
+    # --- did the memory tools actually connect -------------------
+    # A valid sign-in makes the hooks work whether or not the MCP server ever
+    # reached Kemory, so only the server's own agent row can answer this.
+
+    @staticmethod
+    def agent(slug="claude-code", days_ago=0, name="claude-code-oauth"):
+        t = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - days_ago * 86400))
+        return {"agent_id": "a", "agent_name": name, "client_slug": slug,
+                "status": "active", "last_active_at": t}
+
+    def test_status_flags_tools_that_never_connected(self):
+        Recorder.agents_payload = [self.agent(slug="claude-web")]
+        r = self.run_script("status.sh", {}, KEMORY_TOKEN="t")
+        self.assertIn("never seen the memory tools connect", r.stdout)
+        self.assertIn("/mcp", r.stdout)
+
+    def fake_cli(self, version):
+        d = pathlib.Path(self.home) / "bin"
+        d.mkdir(exist_ok=True)
+        f = d / "kemory"
+        f.write_text(f'#!/bin/sh\necho "kemory, version {version}"\n')
+        f.chmod(0o755)
+        return f"{d}:{os.environ.get('PATH', '')}"
+
+    def test_status_names_a_cli_too_old_to_register(self):
+        # CLI bridges before 0.6.8 never sent initialize upstream.
+        Recorder.agents_payload = []
+        r = self.run_script("status.sh", {}, KEMORY_TOKEN="t", PATH=self.fake_cli("0.6.7"))
+        self.assertIn("before 0.6.8", r.stdout)
+        self.assertIn("kemory upgrade", r.stdout)
+
+    def test_status_does_not_blame_a_current_cli(self):
+        Recorder.agents_payload = []
+        r = self.run_script("status.sh", {}, KEMORY_TOKEN="t", PATH=self.fake_cli("0.6.10"))
+        self.assertNotIn("kemory upgrade", r.stdout)
+        self.assertIn("/mcp", r.stdout)
+
+    def test_status_confirms_tools_that_connected(self):
+        Recorder.agents_payload = [self.agent(days_ago=0)]
+        r = self.run_script("status.sh", {}, KEMORY_TOKEN="t")
+        self.assertIn("has seen the memory tools connect", r.stdout)
+        self.assertNotIn("never seen", r.stdout)
+
+    def test_status_counts_a_legacy_agent_name(self):
+        Recorder.agents_payload = [self.agent(slug=None, name="claude-code-agent")]
+        r = self.run_script("status.sh", {}, KEMORY_TOKEN="t")
+        self.assertIn("has seen the memory tools connect", r.stdout)
+
+    def test_status_flags_tools_that_stopped_connecting(self):
+        Recorder.agents_payload = [self.agent(days_ago=12)]
+        r = self.run_script("status.sh", {}, KEMORY_TOKEN="t")
+        self.assertIn("last connected from Claude Code 12 days ago", r.stdout)
+
+    def test_status_does_not_guess_when_the_server_cannot_say(self):
+        # The namespaces payload is not an agent list: say nothing either way.
+        r = self.run_script("status.sh", {}, KEMORY_TOKEN="t")
+        self.assertIn("could not ask the Kemory server", r.stdout)
+        self.assertNotIn("never seen", r.stdout)
+
+    def test_status_skips_the_check_for_an_api_key(self):
+        # An API key authenticates as its own agent; there is no claude-code
+        # row to expect, so the check would only ever be a false alarm.
+        Recorder.agents_payload = []
+        r = self.run_script("status.sh", {}, KEMORY_API_KEY="k")
+        self.assertNotIn("memory tools connect", r.stdout)
+
 class CredentialTest(unittest.TestCase):
     """Token refresh and the two-credential story.
 
@@ -1123,6 +1195,7 @@ class CredentialTest(unittest.TestCase):
         Recorder.posts.clear()
         Recorder.get_payload = {"namespaces": []}
         Recorder.get_status = 200
+        Recorder.agents_payload = None
         Recorder.token_payload = {"access_token": "fresh-token",
                                   "expires_in": 3600}
         Recorder.token_status = 200
@@ -1989,9 +2062,14 @@ class DuplicateServerTest(unittest.TestCase):
                                       "url": f"{self.mine}/mcp/v1"}})
         self.assertStoodDown(self.launch(), "memory")
 
-    def test_yields_to_a_per_project_entry(self):
-        self.write_config({}, projects={"/somewhere": {"mcpServers": {
+    def test_yields_to_this_projects_entry(self):
+        self.write_config({}, projects={self.home: {"mcpServers": {
             "kemory": {"type": "http", "url": f"{self.mine}/mcp/v1"}}}})
+        self.assertStoodDown(self.launch(), "kemory")
+
+    def test_yields_to_the_projects_own_mcp_json(self):
+        self.write_config({"kemory": {"type": "http", "url": f"{self.mine}/mcp/v1"}},
+                          name=".mcp.json")
         self.assertStoodDown(self.launch(), "kemory")
 
     def test_the_message_names_the_file_and_a_way_back(self):
@@ -2032,6 +2110,29 @@ class DuplicateServerTest(unittest.TestCase):
         self.write_config({"kemory": {"command": "kemory",
                                       "args": ["--env", "prod", "mcp", "serve"]}})
         self.assertServed(self.launch())
+
+    def test_does_not_yield_to_another_projects_entry(self):
+        # Claude Code loads only the current project's entry; yielding to one it
+        # never loads leaves this session with no memory tools.
+        self.write_config({}, projects={"/somewhere/else": {"mcpServers": {
+            "kemory": {"type": "http", "url": f"{self.mine}/mcp/v1"}}}})
+        self.assertServed(self.launch())
+
+    def test_does_not_yield_to_claude_desktop_config(self):
+        # claude_desktop_config.json belongs to the Claude Desktop chat app,
+        # which Claude Code does not read.
+        d = pathlib.Path(self.home) / "Library" / "Application Support" / "Claude"
+        d.mkdir(parents=True)
+        (d / "claude_desktop_config.json").write_text(json.dumps({"mcpServers": {
+            "kemory": {"type": "http", "url": f"{self.mine}/mcp/v1"}}}))
+        self.assertServed(self.launch())
+
+    def test_does_not_yield_to_a_home_mcp_json_outside_the_project(self):
+        self.write_config({"kemory": {"type": "http", "url": f"{self.mine}/mcp/v1"}},
+                          name=".mcp.json")
+        project = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, project, ignore_errors=True)
+        self.assertServed(self.launch(CLAUDE_PROJECT_DIR=project))
 
     def test_no_config_at_all_serves(self):
         self.assertServed(self.launch())
