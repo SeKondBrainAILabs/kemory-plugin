@@ -63,6 +63,7 @@ fi
 if [ -n "${KEMORY_BASE_URL:-}" ] && command -v curl >/dev/null 2>&1; then
   code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 6 \
           -H "$KEMORY_AUTH_HEADER" "$KEMORY_BASE_URL/api/v1/namespaces" 2>/dev/null || echo 000)"
+  api_code="$code"
   case "$code" in
     200)      ok  "API reachable and credentials accepted (HTTP 200)" ;;
     401|403)  bad "API reachable but rejected the credentials (HTTP $code)" ;;
@@ -121,6 +122,71 @@ if [ -n "$duplicate" ] && [ "${KEMORY_ALLOW_DUPLICATE:-0}" != "1" ]; then
 elif [ -n "$duplicate" ]; then
   info "another server ('${duplicate%%	*}') covers this same Kemory, and"
   info "KEMORY_ALLOW_DUPLICATE=1 is set — you are deliberately running two"
+fi
+
+# Everything above predicts whether the server CAN start. Only the server knows
+# whether it DID: each MCP handshake registers (or refreshes) a claude-code
+# agent row, and that row is what the dashboard shows. Hooks writing captures
+# while that row is missing is how a user ends up "set up" with no memory tools
+# and an empty dashboard card. Asked with the same credential the
+# hooks use; skipped for an API key, which authenticates as its own agent.
+if [ "${api_code:-}" = "200" ] && [ "${KEMORY_AUTH_HEADER#Authorization:}" != "$KEMORY_AUTH_HEADER" ] \
+   && command -v python3 >/dev/null 2>&1; then
+  agents="$(curl -s --max-time 6 -H "$KEMORY_AUTH_HEADER" \
+            "$KEMORY_BASE_URL/api/v1/agents?status=active&scope=mine" 2>/dev/null)"
+  seen="$(printf '%s' "$agents" | python3 -c '
+import json, sys
+from datetime import datetime, timezone
+try:
+    rows = json.load(sys.stdin)
+except Exception:
+    print("unknown"); raise SystemExit
+if not isinstance(rows, list):
+    print("unknown"); raise SystemExit
+last = None
+for a in rows:
+    if not isinstance(a, dict):
+        continue
+    if a.get("client_slug") != "claude-code" and a.get("agent_name") != "claude-code-agent":
+        continue
+    try:
+        t = datetime.fromisoformat(str(a.get("last_active_at") or "").replace("Z", "+00:00"))
+    except ValueError:
+        continue
+    if t.tzinfo is None:
+        t = t.replace(tzinfo=timezone.utc)
+    last = t if last is None or t > last else last
+if last is None:
+    print("never")
+else:
+    print(int((datetime.now(timezone.utc) - last).total_seconds() // 86400))
+' 2>/dev/null)"
+  case "$seen" in
+    never)
+      bad "the Kemory server has never seen the memory tools connect from Claude Code"
+      info "so the kemory_* tools are missing and the dashboard shows Claude Code as"
+      info "not connected, even though the hooks work."
+      # Before 0.6.8 the CLI's bridge answered `initialize` itself and never
+      # sent it upstream, so its tools worked and nothing ever registered.
+      cli_version="$(kemory --version 2>/dev/null | sed -n 's/.*version \([0-9][0-9.]*\).*/\1/p')"
+      if [ -n "$cli_version" ] && [ "$(printf '%s\n0.6.8\n' "$cli_version" | sort -t. -k1,1n -k2,2n -k3,3n | head -1)" != "0.6.8" ]; then
+        info "kemory CLI $cli_version serves the tools, and versions before 0.6.8"
+        info "never register with the server: run 'kemory upgrade', then restart"
+        info "Claude Code fully"
+      else
+        info "Run /mcp: if kemory is failed or missing, restart Claude Code fully;"
+        info "if it names another entry, that entry is the one to fix"
+      fi ;;
+    ''|unknown)
+      info "could not ask the Kemory server whether the memory tools have connected" ;;
+    *)
+      if [ "$seen" -le 7 ] 2>/dev/null; then
+        ok "the Kemory server has seen the memory tools connect from Claude Code"
+      else
+        bad "the memory tools last connected from Claude Code $seen days ago"
+        info "run /mcp: if kemory is failed or missing, restart Claude Code fully"
+      fi ;;
+  esac
 fi
 
 # Entries for a DIFFERENT Kemory are deliberate multi-env work, not a fault, so

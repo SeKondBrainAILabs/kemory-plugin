@@ -3,6 +3,23 @@
 All notable changes to this project are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.7.4] — 2026-09-23
+
+### Fixed
+- **The memory tools could go missing while every check said Kemory was set
+  up.** The bundled server stood down for any kemory entry it found, including
+  ones Claude Code never runs: an entry in Claude Desktop's
+  `claude_desktop_config.json`, an entry under a different project in
+  `~/.claude.json`, and a `kemory mcp serve` entry whose bare `kemory` command
+  is not on the app's PATH (a Homebrew prefix such as `~/homebrew/bin` is not).
+  With nothing serving, the hooks kept capturing and the dashboard showed Claude
+  Code as not connected. It now stands down only for an entry Claude Code loads
+  for this session and can start.
+- **`/kemory:status` now asks the server whether the tools connected.** A valid
+  sign-in proves only the hooks, so it checks for a Claude Code agent the server
+  has seen in the last 7 days, and names a kemory CLI older than 0.6.8 (whose
+  bridge never registered). `kemory-setup` no longer calls that state set up.
+
 ## [0.7.2] — 2026-09-14
 
 ### Fixed

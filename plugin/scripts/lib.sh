@@ -283,27 +283,42 @@ PY
 #
 # Resolves each entry the way the thing that runs it would:
 #   * an http/sse entry          -> the host of its own url
-#   * `kemory [--env X] mcp serve` -> the host in ~/.kemory/credentials-X
+#   * `kemory [--env X] mcp serve` -> the host in ~/.kemory/credentials-X,
+#                                     if that command is on this process's PATH
 # An entry whose endpoint cannot be worked out is SKIPPED, never guessed at:
 # standing down wrongly costs the user their tools.
+#
+# ONLY configs Claude Code loads for THIS session count: the project's
+# .mcp.json, the user-scope mcpServers in ~/.claude.json, and that file's entry
+# for the current project. Claude Desktop's claude_desktop_config.json belongs
+# to a different app, and another project's entry is not loaded here — standing
+# down for either left Claude Code with no memory tools at all while the hooks
+# kept capturing.
 #
 # Echoes "<server name>\t<config path>" on a match; silent otherwise.
 kemory_find_duplicate_server() {
   [ -n "${KEMORY_BASE_URL:-}" ] || return 0
   command -v python3 >/dev/null 2>&1 || return 0
   KEMORY_MINE="$KEMORY_BASE_URL" python3 - <<'PY' 2>/dev/null
-import json, os, urllib.parse
+import json, os, shutil, urllib.parse
 
 MINE = urllib.parse.urlparse(os.environ["KEMORY_MINE"]).netloc.lower()
 if not MINE:
     raise SystemExit(0)
 
+PROJECT = os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
+USER_CONFIG = os.path.expanduser("~/.claude.json")
 candidates = [
-    os.path.join(os.environ.get("CLAUDE_PROJECT_DIR", os.getcwd()), ".mcp.json"),
-    os.path.expanduser("~/.claude.json"),
-    os.path.expanduser("~/.mcp.json"),
-    os.path.expanduser("~/Library/Application Support/Claude/claude_desktop_config.json"),
+    os.path.join(PROJECT, ".mcp.json"),
+    USER_CONFIG,
 ]
+
+
+def same_dir(a, b):
+    try:
+        return os.path.realpath(a) == os.path.realpath(b)
+    except Exception:
+        return False
 
 
 def host_of(url):
@@ -339,6 +354,14 @@ def endpoint_of(cfg):
     command = str(cfg.get("command") or "")
     args = [str(a) for a in (cfg.get("args") or [])]
     if os.path.basename(command) == "kemory" and "serve" in args:
+        # The host launches this entry with the PATH it gave this process, so a
+        # command we cannot find here cannot start there either. `kemory mcp
+        # install` writes the bare name, and a desktop app's PATH lacks a
+        # Homebrew prefix such as ~/homebrew/bin; yielding to that entry left
+        # the session with no server at all.
+        env = cfg.get("env") if isinstance(cfg.get("env"), dict) else {}
+        if not shutil.which(command, path=env.get("PATH") or os.environ.get("PATH")):
+            return ""
         return cli_host(args)
     return ""
 
@@ -364,12 +387,12 @@ for path in candidates:
     if not isinstance(data, dict):
         continue
     hit = scan(data.get("mcpServers"), path)
-    if not hit:
-        for proj in (data.get("projects") or {}).values():
-            if isinstance(proj, dict):
+    if not hit and path == USER_CONFIG:
+        projects = data.get("projects")
+        for key, proj in (projects.items() if isinstance(projects, dict) else ()):
+            if isinstance(proj, dict) and same_dir(key, PROJECT):
                 hit = scan(proj.get("mcpServers"), path)
-                if hit:
-                    break
+                break
     if hit:
         print(f"{hit[0]}\t{hit[1]}")
         raise SystemExit(0)
