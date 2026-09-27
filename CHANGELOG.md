@@ -3,6 +3,18 @@
 All notable changes to this project are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.8.2] — 2026-09-28
+
+### Added
+- **`/kemory:login` hands a new account to Kemory's web onboarding.** Once the
+  browser approval succeeds, the command opens the onboarding page for the
+  environment it signed in to (`kemory.sekondbrain.ai/onboarding` for prod,
+  `kemory-app.staging.apps.s9n.ai/onboarding` for staging) and prints the
+  link. A new account walks the About → Privacy → Extension → Your AIs flow;
+  an account that has finished it lands on the dashboard. An API host the
+  plugin does not recognise gets no link; `KEMORY_ONBOARDING_URL` sets one
+  explicitly and `KEMORY_NO_BROWSER=1` prints it without opening a browser.
+
 ## [0.8.1] — 2026-09-27
 
 ### Fixed

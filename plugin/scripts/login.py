@@ -36,6 +36,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import webbrowser
 
 DEFAULT_URL = os.environ.get("KEMORY_DEFAULT_URL", "https://api.kemory.s9n.ai")
 ENV = os.environ.get("KEMORY_ENV", "prod")
@@ -44,6 +45,13 @@ SCOPE = "openid profile email offline_access"
 TIMEOUT = 15
 # The file records this; the CLI reads it to know how to interpret the rest.
 CREDENTIAL_VERSION = 2
+DASHBOARD_FOR_API_HOST = {
+    "api.kemory.s9n.ai": "https://kemory.sekondbrain.ai",
+    "api.kemory.sekondbrain.ai": "https://kemory.sekondbrain.ai",
+    "kemory-api.prod.apps.s9n.ai": "https://kemory.sekondbrain.ai",
+    "api.kemory.staging.s9n.ai": "https://kemory-app.staging.apps.s9n.ai",
+    "kemory-api.staging.apps.s9n.ai": "https://kemory-app.staging.apps.s9n.ai",
+}
 
 
 def fail(message: str) -> None:
@@ -169,6 +177,26 @@ def write_credentials(tokens: dict, issuer: str, base_url: str) -> str:
     return path
 
 
+def onboarding_url(base_url: str) -> str:
+    explicit = os.environ.get("KEMORY_ONBOARDING_URL", "").strip()
+    if explicit:
+        return explicit
+    dashboard = DASHBOARD_FOR_API_HOST.get(urllib.parse.urlparse(base_url).hostname or "")
+    return f"{dashboard}/onboarding" if dashboard else ""
+
+
+def open_onboarding(url: str) -> None:
+    if not url:
+        return
+    print(f"\nFinish setting up Kemory in your browser: {url}")
+    if os.environ.get("KEMORY_NO_BROWSER"):
+        return
+    try:
+        webbrowser.open(url, new=2)
+    except Exception:
+        pass
+
+
 def main() -> None:
     base_url = (os.environ.get("KEMORY_URL") or DEFAULT_URL).rstrip("/")
     issuer = discover(base_url)
@@ -230,6 +258,7 @@ def main() -> None:
             who = claims.get("email") or claims.get("preferred_username") or "signed in"
             print(f"\nSigned in as {who}. Credential written to {path}.")
             print("Restart Claude Code to pick it up — the hooks and the memory tools both read this file.")
+            open_onboarding(onboarding_url(base_url))
             return
         error = body.get("error")
         if error == "authorization_pending":

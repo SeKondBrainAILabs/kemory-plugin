@@ -12,11 +12,13 @@ import os
 import pathlib
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import time
 import urllib.parse
 import unittest
+import unittest.mock
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / "plugin" / "scripts"
@@ -2037,6 +2039,45 @@ class DeviceLoginTest(unittest.TestCase):
     def test_shows_one_clickable_url(self):
         r = self.run_login()
         self.assertIn("user_code=ABCD-EFGH", r.stdout)
+
+    def test_points_a_new_sign_in_at_the_web_onboarding(self):
+        r = self.run_login(KEMORY_ONBOARDING_URL="https://dash.example.test/onboarding",
+                           KEMORY_NO_BROWSER="1")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("Finish setting up Kemory in your browser: "
+                      "https://dash.example.test/onboarding", r.stdout)
+        self.assertLess(r.stdout.index("Signed in as"),
+                        r.stdout.index("Finish setting up Kemory"))
+
+    def test_says_nothing_about_onboarding_for_an_unknown_api_host(self):
+        r = self.run_login(KEMORY_NO_BROWSER="1")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("Finish setting up Kemory", r.stdout)
+
+    def test_no_onboarding_link_when_sign_in_fails(self):
+        IdpRecorder.token_script = [(400, {"error": "access_denied"})]
+        r = self.run_login(KEMORY_ONBOARDING_URL="https://dash.example.test/onboarding",
+                           KEMORY_NO_BROWSER="1")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertNotIn("Finish setting up Kemory", r.stdout)
+
+    def test_each_known_api_host_maps_to_its_own_dashboard_onboarding(self):
+        sys.path.insert(0, str(SCRIPTS))
+        try:
+            import login
+        finally:
+            sys.path.remove(str(SCRIPTS))
+        env = {k: v for k, v in os.environ.items() if k != "KEMORY_ONBOARDING_URL"}
+        with unittest.mock.patch.dict(os.environ, env, clear=True):
+            self.assertEqual(login.onboarding_url("https://api.kemory.s9n.ai"),
+                             "https://kemory.sekondbrain.ai/onboarding")
+            self.assertEqual(login.onboarding_url("https://api.kemory.sekondbrain.ai/"),
+                             "https://kemory.sekondbrain.ai/onboarding")
+            self.assertEqual(login.onboarding_url("https://kemory-api.staging.apps.s9n.ai"),
+                             "https://kemory-app.staging.apps.s9n.ai/onboarding")
+            self.assertEqual(login.onboarding_url("https://api.kemory.staging.s9n.ai"),
+                             "https://kemory-app.staging.apps.s9n.ai/onboarding")
+            self.assertEqual(login.onboarding_url("https://kemory.self-hosted.example"), "")
 
     def test_falls_back_to_uri_plus_code_when_complete_is_absent(self):
         IdpRecorder.device_response = dict(IdpRecorder.device_response)
