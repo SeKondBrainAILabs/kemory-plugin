@@ -31,6 +31,7 @@ import hashlib
 import json
 import os
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -150,9 +151,11 @@ def write_credentials(tokens: dict, issuer: str, base_url: str) -> str:
     path = credentials_path()
     os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
     # Atomic and 0600, matching lib.sh's refresh: this file holds a refresh
-    # token, and as of now it has two writers.
-    tmp = path + ".tmp"
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    # token. The temp name is unique per writer -- a shared `.tmp` let two
+    # concurrent writers corrupt the file. mkstemp creates it 0600.
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path),
+                               prefix="." + os.path.basename(path) + ".",
+                               suffix=".tmp")
     try:
         with os.fdopen(fd, "w") as fh:
             json.dump(data, fh)

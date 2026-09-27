@@ -1339,6 +1339,93 @@ class CredentialTest(unittest.TestCase):
         self.assertEqual(oct(creds.stat().st_mode)[-3:], "600",
                          "the file holds a bearer token")
 
+    # --- concurrent writers and the file they could damage -------
+    def session_start(self):
+        e = {k: v for k, v in os.environ.items() if not k.startswith("KEMORY_")}
+        e.update({"HOME": self.home, "CLAUDE_PROJECT_DIR": self.home})
+        r = subprocess.run([str(SCRIPTS / "session-start.sh")], input="{}",
+                           text=True, capture_output=True, env=e)
+        return json.loads(r.stdout)
+
+    def test_refresh_does_not_write_through_a_fixed_temp_path(self):
+        # Every writer used to share credentials-prod.tmp, which is what two
+        # concurrent refreshes collided on. Occupy that path: a writer with its
+        # own temp name is unaffected, a writer using the shared one cannot
+        # persist the refresh at all.
+        creds = self.write_creds()
+        (creds.parent / "credentials-prod.tmp").mkdir()
+        self.resolve()
+        self.assertEqual(json.loads(creds.read_text())["access_token"],
+                         "fresh-token")
+        self.assertEqual(sorted(p.name for p in creds.parent.iterdir()),
+                         ["credentials-prod", "credentials-prod.tmp"],
+                         "no temp file left behind")
+
+    def test_concurrent_refreshes_leave_valid_json(self):
+        creds = self.write_creds()
+        e = {k: v for k, v in os.environ.items() if not k.startswith("KEMORY_")}
+        e["HOME"] = self.home
+        procs = [subprocess.Popen(
+            ["bash", "-c", f'. "{SCRIPTS}/lib.sh"; kemory_resolve_auth'],
+            env=e, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            for _ in range(8)]
+        for p in procs:
+            p.wait(timeout=30)
+        self.assertEqual(json.loads(creds.read_text())["access_token"],
+                         "fresh-token")
+        self.assertEqual([p.name for p in creds.parent.iterdir()],
+                         ["credentials-prod"])
+
+    def test_trailing_bytes_are_recovered_and_repaired(self):
+        # The exact shape the race left on disk: one whole object, then "}".
+        creds = self.write_creds(expires_at=time.time() + 3600,
+                                 access_token="still-good")
+        creds.write_text(creds.read_text() + "}")
+        out = self.resolve().stdout
+        self.assertIn("Bearer still-good", out)
+        self.assertEqual(json.loads(creds.read_text())["access_token"],
+                         "still-good",
+                         "repaired on disk, so an older CLI can read it too")
+        self.assertEqual(oct(creds.stat().st_mode)[-3:], "600")
+
+    def test_unreadable_file_is_reported_as_corrupt_not_absent(self):
+        creds = self.write_creds()
+        creds.write_text('"access_token": "x"}')
+        e = {k: v for k, v in os.environ.items() if not k.startswith("KEMORY_")}
+        e["HOME"] = self.home
+        r = subprocess.run(
+            ["bash", "-c", f'. "{SCRIPTS}/lib.sh"; kemory_resolve_auth;'
+             ' echo "rc=$? corrupt=${KEMORY_CREDS_CORRUPT:-}"'],
+            text=True, capture_output=True, env=e)
+        self.assertIn("rc=1", r.stdout)
+        self.assertIn(f"corrupt={creds}", r.stdout)
+
+        r = subprocess.run([str(SCRIPTS / "mcp.sh")], input="", text=True,
+                           capture_output=True, env=e)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("not valid JSON", r.stderr)
+        self.assertNotIn("no credential", r.stderr)
+
+    def test_corrupt_file_is_announced_every_session(self):
+        # The once-a-day setup hint is what hid this for a day: the notice
+        # is about a fault that is true now, so every session gets it.
+        creds = self.write_creds()
+        creds.write_text("{not json")
+        for _ in range(2):
+            out = self.session_start()
+            self.assertIn("not valid JSON", out.get("systemMessage", ""))
+            self.assertIn("/kemory:login", out["systemMessage"])
+            self.assertIn("Kemory is this user's persistent memory",
+                          out["hookSpecificOutput"]["additionalContext"])
+
+    def test_dead_token_is_announced_every_session(self):
+        Recorder.token_status = 500
+        self.write_creds()
+        for _ in range(2):
+            msg = self.session_start().get("systemMessage", "")
+            self.assertIn("expired", msg)
+            self.assertIn("/kemory:login", msg)
+
     # --- the key our own docs tell people to put in an MCP config ----------
     def mcp_config(self, body):
         p = pathlib.Path(self.home) / ".mcp.json"

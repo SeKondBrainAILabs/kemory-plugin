@@ -41,7 +41,7 @@ kemory_retarget_url() {
 kemory_resolve_auth() {
   local creds url token api_key
   url="" ; token="" ; api_key=""
-  unset KEMORY_URL_RETARGETED_FROM
+  unset KEMORY_URL_RETARGETED_FROM KEMORY_CREDS_CORRUPT KEMORY_TOKEN_EXPIRED
 
   if [ -n "${KEMORY_API_KEY:-}" ]; then
     api_key="$KEMORY_API_KEY"
@@ -56,12 +56,58 @@ kemory_resolve_auth() {
     command -v python3 >/dev/null 2>&1 || return 1
     # shellcheck disable=SC2016
     eval "$(KEMORY_CREDS="$creds" python3 -c '
-import json, os, shlex, time
+import json, os, shlex, tempfile, time
 
 CREDS = os.environ["KEMORY_CREDS"]
+
+
+def write_back(d):
+    """Replace the credential file atomically, 0600.
+
+    The temp name is unique per writer. It used to be CREDS + ".tmp" in every
+    writer (this hook, login.py, the CLI), so two concurrent refreshes wrote
+    into one inode and left the tail of the longer write behind the shorter
+    one -- a file ending in "}}" that every reader rejected.
+    mkstemp creates the file 0600 and beside the original, so the rename
+    cannot cross a filesystem boundary.
+    """
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(CREDS) or ".",
+                               prefix="." + os.path.basename(CREDS) + ".",
+                               suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as fh:
+            json.dump(d, fh)
+        os.replace(tmp, CREDS)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except Exception:
+            pass
+        return False
+    return True
+
+
 try:
-    d = json.load(open(CREDS))
+    text = open(CREDS).read()
 except Exception:
+    raise SystemExit(0)
+try:
+    d = json.loads(text)
+except ValueError:
+    # A file damaged by the race above is one complete object followed by
+    # leftover bytes. Take the object, and repair the file on disk: an older
+    # kemory CLI -- which is what serves the MCP tools when it is installed --
+    # still rejects the damaged file and would report the user signed out.
+    try:
+        d, _ = json.JSONDecoder().raw_decode(text.lstrip())
+    except ValueError:
+        d = None
+    if isinstance(d, dict):
+        write_back(d)
+if not isinstance(d, dict):
+    # Present but unreadable is not the same as absent: say which, so nobody
+    # is sent to sign in when the fix is replacing a broken file.
+    print("KEMORY_CREDS_CORRUPT=" + shlex.quote(CREDS))
     raise SystemExit(0)
 
 expired = False
@@ -106,21 +152,9 @@ def refresh(d):
         d["refresh_token"] = fresh["refresh_token"]
     if fresh.get("expires_in"):
         d["expires_at"] = time.time() + float(fresh["expires_in"])
-    # Atomic, and 0600 -- this file holds a bearer token. Written beside the
-    # original so the rename cannot cross a filesystem boundary.
-    tmp = CREDS + ".tmp"
-    try:
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w") as fh:
-            json.dump(d, fh)
-        os.replace(tmp, CREDS)
-    except Exception:
-        try:
-            os.unlink(tmp)
-        except Exception:
-            pass
-        # The refreshed token is still good for this process even if the
-        # write failed, so do not report failure.
+    # The refreshed token is still good for this process even if the write
+    # fails, so do not report failure.
+    write_back(d)
     return True
 
 
