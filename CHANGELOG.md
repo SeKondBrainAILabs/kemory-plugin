@@ -3,6 +3,28 @@
 All notable changes to this project are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.8.1] — 2026-09-27
+
+### Fixed
+- **Two concurrent token refreshes could corrupt the credential file.** Every
+  writer (the hooks' refresh, `/kemory:login`, the kemory CLI) staged its write
+  at the same `credentials-<env>.tmp` path, so two sessions refreshing at once
+  wrote into one file and left the tail of the longer write behind the shorter
+  one. The result ended in `}}`, every reader rejected it, and the MCP server,
+  context injection, recall, rating and capture all stopped. Each write now
+  gets its own temp file. The kemory CLI gets the same fix in its own release.
+- **A damaged credential file is recovered instead of treated as missing.** A
+  file that is one complete object followed by leftover bytes, which is what
+  the race above produced, is read and repaired on disk, so an older CLI can
+  read it too. A file that cannot be recovered is reported as not valid JSON
+  by the MCP server, `/kemory:status` and SessionStart, rather than as "no
+  credential".
+- **Auth faults are announced in every session.** A corrupt credential file or
+  an expired token that cannot be refreshed now puts a message in each
+  session with the fix. Both used to fall through to the setup hint, which
+  shows once a day, so after the first session every later one lost its
+  memory tools without a word.
+
 ## [0.8.0] — 2026-09-23
 
 ### Changed

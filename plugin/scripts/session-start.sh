@@ -257,7 +257,29 @@ emit_setup_hint() {
   exit 0
 }
 
-kemory_resolve_auth || emit_setup_hint
+# A credential that exists but cannot be used is a fault, not a setup choice,
+# so it is NOT throttled like the hint above. That hint's once-a-day stamp is
+# what hid a corrupt credential file for a whole day: the first
+# session was told "no credential", which was wrong, and every later session
+# was told nothing while tools, recall and capture were all off.
+emit_auth_fault() {
+  KEMORY_MSG="$1" python3 -c 'import json, os
+msg = os.environ["KEMORY_MSG"]
+if os.environ.get("KEMORY_NOTICE"):
+    msg += "\n\n" + os.environ["KEMORY_NOTICE"]
+print(json.dumps({"systemMessage": msg, "hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": os.environ["KEMORY_INSTRUCTION"]}}))' 2>/dev/null
+  exit 0
+}
+
+if ! kemory_resolve_auth; then
+  if [ -n "${KEMORY_CREDS_CORRUPT:-}" ]; then
+    emit_auth_fault "Kemory plugin: $KEMORY_CREDS_CORRUPT is not valid JSON and could not be recovered, so the kemory MCP server will not start and context injection, recall, rating and capture are off. Run /kemory:login to write a fresh one."
+  fi
+  emit_setup_hint
+fi
+if [ "${KEMORY_TOKEN_EXPIRED:-0}" = "1" ]; then
+  emit_auth_fault "Kemory plugin: your stored Kemory token has expired and could not be refreshed, so the kemory MCP server will not start and context injection, recall, rating and capture are off. Run /kemory:login to sign in again."
+fi
 
 # Say so when the host has switched our tools off for this session.
 #

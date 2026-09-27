@@ -42,6 +42,9 @@ if kemory_resolve_auth; then
     bad "the stored token is expired and could not be refreshed"
     info "run /kemory:login again — until then every hook will be rejected"
   fi
+elif [ -n "${KEMORY_CREDS_CORRUPT:-}" ]; then
+  bad "$KEMORY_CREDS_CORRUPT is not valid JSON — every hook is inert"
+  info "run /kemory:login to write a fresh credential file"
 else
   bad "no credential the hooks can use — every hook is inert"
   mcp_key="$(kemory_find_mcp_config_key)"

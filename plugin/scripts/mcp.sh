@@ -23,6 +23,10 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$DIR/lib.sh"
 
 if ! kemory_resolve_auth; then
+  if [ -n "${KEMORY_CREDS_CORRUPT:-}" ]; then
+    echo "kemory: $KEMORY_CREDS_CORRUPT is not valid JSON and could not be recovered — run /kemory:login to write a fresh one." >&2
+    exit 1
+  fi
   echo "kemory: no credential — run /kemory:login in Claude Code to sign in with your browser (or set KEMORY_API_KEY for a headless machine). Using the claude.ai connector instead? Disable this server under /mcp." >&2
   exit 1
 fi
