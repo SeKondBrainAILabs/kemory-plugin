@@ -24,6 +24,12 @@ All notable changes to this project are documented here. This project follows
   session with the fix. Both used to fall through to the setup hint, which
   shows once a day, so after the first session every later one lost its
   memory tools without a word.
+- **A `python3` that does not run is named as the problem.** The hooks checked
+  only that `python3` was on PATH. macOS without the developer tools ships a
+  stub there, and Windows can have a Store alias that behaves the same. Both
+  passed the check, failed when run, and were reported as "no credential", so
+  signing in again did nothing. The MCP server, `/kemory:status` and
+  SessionStart now say that Python 3 is missing or does not run.
 
 ## [0.8.0] — 2026-09-23
 

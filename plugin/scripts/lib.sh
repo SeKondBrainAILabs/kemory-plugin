@@ -38,10 +38,18 @@ kemory_retarget_url() {
   esac
 }
 
+# Whether python3 actually runs. `command -v` is not enough: macOS without the
+# developer tools ships /usr/bin/python3 as a stub that only offers to install
+# them, and Windows can have a Store alias that does the same. Both are found on
+# PATH and fail when run, which used to surface as "no credential".
+kemory_python_ok() {
+  command -v python3 >/dev/null 2>&1 && python3 -c '' >/dev/null 2>&1
+}
+
 kemory_resolve_auth() {
   local creds url token api_key
   url="" ; token="" ; api_key=""
-  unset KEMORY_URL_RETARGETED_FROM KEMORY_CREDS_CORRUPT KEMORY_TOKEN_EXPIRED
+  unset KEMORY_URL_RETARGETED_FROM KEMORY_CREDS_CORRUPT KEMORY_TOKEN_EXPIRED KEMORY_NO_PYTHON
 
   if [ -n "${KEMORY_API_KEY:-}" ]; then
     api_key="$KEMORY_API_KEY"
@@ -53,7 +61,9 @@ kemory_resolve_auth() {
     creds="$HOME/.kemory/credentials-${KEMORY_ENV:-prod}"
     [ -r "$creds" ] || creds="$HOME/.kemory/credentials"
     [ -r "$creds" ] || return 1
-    command -v python3 >/dev/null 2>&1 || return 1
+    # The file is there; without a working python3 it cannot be read. Say that
+    # rather than letting it look like there is no credential.
+    kemory_python_ok || { export KEMORY_NO_PYTHON=1; return 1; }
     # shellcheck disable=SC2016
     eval "$(KEMORY_CREDS="$creds" python3 -c '
 import json, os, shlex, tempfile, time

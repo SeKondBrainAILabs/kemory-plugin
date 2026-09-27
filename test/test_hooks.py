@@ -1418,6 +1418,34 @@ class CredentialTest(unittest.TestCase):
             self.assertIn("Kemory is this user's persistent memory",
                           out["hookSpecificOutput"]["additionalContext"])
 
+    def stub_python_env(self):
+        # A python3 that is found on PATH and fails when run: the macOS stub
+        # without the developer tools, or a Windows Store alias.
+        stub = pathlib.Path(self.home) / "stub-bin"
+        stub.mkdir()
+        (stub / "python3").write_text("#!/bin/sh\nexit 1\n")
+        (stub / "python3").chmod(0o755)
+        e = {k: v for k, v in os.environ.items() if not k.startswith("KEMORY_")}
+        e.update({"HOME": self.home, "CLAUDE_PROJECT_DIR": self.home,
+                  "PATH": f"{stub}:/usr/bin:/bin"})
+        return e
+
+    def test_unrunnable_python_is_named_not_reported_as_no_credential(self):
+        self.write_creds(expires_at=time.time() + 3600)
+        e = self.stub_python_env()
+
+        r = subprocess.run([str(SCRIPTS / "mcp.sh")], input="", text=True,
+                           capture_output=True, env=e)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("python3 is missing or does not run", r.stderr)
+        self.assertNotIn("no credential", r.stderr)
+
+        r = subprocess.run([str(SCRIPTS / "session-start.sh")], input="{}",
+                           text=True, capture_output=True, env=e)
+        msg = json.loads(r.stdout)["systemMessage"]
+        self.assertIn("python3 is missing or does not run", msg)
+        self.assertNotIn("/kemory:login", msg, "signing in again would not help")
+
     def test_dead_token_is_announced_every_session(self):
         Recorder.token_status = 500
         self.write_creds()

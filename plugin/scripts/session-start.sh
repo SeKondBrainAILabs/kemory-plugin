@@ -272,6 +272,12 @@ print(json.dumps({"systemMessage": msg, "hookSpecificOutput": {"hookEventName": 
 }
 
 if ! kemory_resolve_auth; then
+  if [ -n "${KEMORY_NO_PYTHON:-}" ]; then
+    # No python to build the JSON with, so it is written by hand. Fixed text,
+    # nothing interpolated, so there is nothing to escape.
+    printf '%s\n' '{"systemMessage":"Kemory plugin: python3 is missing or does not run (on macOS: xcode-select --install), so the kemory MCP server will not start and context injection, recall, rating and capture are off. Install Python 3, then restart the session."}'
+    exit 0
+  fi
   if [ -n "${KEMORY_CREDS_CORRUPT:-}" ]; then
     emit_auth_fault "Kemory plugin: $KEMORY_CREDS_CORRUPT is not valid JSON and could not be recovered, so the kemory MCP server will not start and context injection, recall, rating and capture are off. Run /kemory:login to write a fresh one."
   fi

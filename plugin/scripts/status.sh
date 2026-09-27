@@ -42,6 +42,9 @@ if kemory_resolve_auth; then
     bad "the stored token is expired and could not be refreshed"
     info "run /kemory:login again — until then every hook will be rejected"
   fi
+elif [ -n "${KEMORY_NO_PYTHON:-}" ]; then
+  bad "python3 is missing or does not run, so the credential file cannot be read"
+  info "install Python 3 (on macOS: xcode-select --install) — every hook is inert until then"
 elif [ -n "${KEMORY_CREDS_CORRUPT:-}" ]; then
   bad "$KEMORY_CREDS_CORRUPT is not valid JSON — every hook is inert"
   info "run /kemory:login to write a fresh credential file"
@@ -155,18 +158,18 @@ fi
 
 if [ -n "${KEMORY_BASE_URL:-}" ]; then
   if [ -n "${KEMORY_API_KEY:-}" ] || [ -n "${KEMORY_TOKEN:-}" ]; then
-    if command -v python3 >/dev/null 2>&1; then
+    if kemory_python_ok; then
       "$serves" "bundled server $verb — credential from the environment"
     else
-      bad "credential found, but python3 is missing and the CLI cannot read it"
+      bad "credential found, but python3 is missing or does not run, and the CLI cannot read it"
       info "install python3, or run 'kemory login' to use the CLI's own bridge"
     fi
   elif command -v kemory >/dev/null 2>&1; then
     "$serves" "bundled server $verb — CLI credential, served by 'kemory mcp serve'"
-  elif command -v python3 >/dev/null 2>&1; then
+  elif kemory_python_ok; then
     "$serves" "bundled server $verb — CLI credential, served by the bundled bridge"
   else
-    bad "credential found, but neither the kemory CLI nor python3 is available"
+    bad "credential found, but neither the kemory CLI nor a working python3 is available"
   fi
 else
   bad "bundled server will not start — no credential (same one the hooks need)"

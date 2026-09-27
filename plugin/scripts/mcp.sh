@@ -23,6 +23,10 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$DIR/lib.sh"
 
 if ! kemory_resolve_auth; then
+  if [ -n "${KEMORY_NO_PYTHON:-}" ]; then
+    echo "kemory: python3 is missing or does not run (on macOS: xcode-select --install), so the credential file cannot be read. Install Python 3, then restart." >&2
+    exit 1
+  fi
   if [ -n "${KEMORY_CREDS_CORRUPT:-}" ]; then
     echo "kemory: $KEMORY_CREDS_CORRUPT is not valid JSON and could not be recovered — run /kemory:login to write a fresh one." >&2
     exit 1
@@ -67,8 +71,8 @@ if [ "$from_env" -eq 0 ] && command -v kemory >/dev/null 2>&1; then
   exec kemory mcp serve
 fi
 
-if ! command -v python3 >/dev/null 2>&1; then
-  echo "kemory: need python3 (or the kemory CLI) to serve the memory tools." >&2
+if ! kemory_python_ok; then
+  echo "kemory: python3 is missing or does not run, and the kemory CLI is not installed — one of them is needed to serve the memory tools." >&2
   exit 1
 fi
 
