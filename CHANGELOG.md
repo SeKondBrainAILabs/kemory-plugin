@@ -3,6 +3,15 @@
 All notable changes to this project are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+- **The store nudge no longer points at a call the server rejects.** When
+  `KEMORY_STORE_NUDGE=1` is set, the nudge suggested `kemory_capture_session`
+  "for the whole window". The server now takes only discrete items the user
+  has confirmed and rejects a conversation window, so the nudge says that
+  instead.
+
 ## [0.8.1] — 2026-09-27
 
 ### Fixed
