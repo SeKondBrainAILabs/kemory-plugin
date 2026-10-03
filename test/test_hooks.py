@@ -431,6 +431,13 @@ class HookTest(unittest.TestCase):
         self.assertEqual(hook["hookEventName"], "Stop")
         self.assertIn("kemory_store_memory", hook["additionalContext"])
 
+    def test_nudge_never_asks_for_a_conversation_window(self):
+        # kemory_capture_session takes user-confirmed items, not a window; the
+        # server rejects a window, so the nudge must not ask for one.
+        context = json.loads(self._nudge(self.DECISION))["hookSpecificOutput"]["additionalContext"]
+        self.assertNotIn("window", context)
+        self.assertIn("confirmed", context)
+
     def test_nudge_is_feedback_not_a_block(self):
         # decision:"block" surfaces as a hook ERROR; additionalContext runs the
         # same continuation loop and reads as guidance. A false positive on the

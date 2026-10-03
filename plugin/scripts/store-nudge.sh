@@ -53,9 +53,10 @@ WRITE_TOOLS = (
 NUDGE = (
     "This turn settled something durable and nothing was written to Kemory. "
     "If a preference, decision, or non-obvious fact came out of it, store it "
-    "now with kemory_store_memory (or kemory_capture_session for the whole "
-    "window), say in one line what you stored and where, and then finish. If "
-    "nothing here is worth keeping past this session, just finish."
+    "now with kemory_store_memory (or kemory_capture_session for several "
+    "items the user has confirmed), say in one line what you stored and "
+    "where, and then finish. If nothing here is worth keeping past this "
+    "session, just finish."
 )
 
 
