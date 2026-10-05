@@ -3,6 +3,15 @@
 All notable changes to this project are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+- **The plugin description still called session capture opt-in.** Capture has
+  been on by default since 0.8.0, but the description in `plugin.json`, the
+  Grok manifest and `marketplace.json`, which is what `/plugin` shows before
+  install, still said "opt-in session capture". It now says capture is on by
+  default.
+
 ## [0.8.2] — 2026-10-05
 
 ### Fixed
