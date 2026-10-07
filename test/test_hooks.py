@@ -140,8 +140,10 @@ class HookTest(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.home, ignore_errors=True)
 
     def env(self, **extra):
+        # The entrypoint changes what the scripts tell the person, so a run
+        # inside the desktop app must see what CI sees.
         e = {k: v for k, v in os.environ.items()
-             if not k.startswith("KEMORY_")}
+             if not k.startswith("KEMORY_") and k != "CLAUDE_CODE_ENTRYPOINT"}
         e.update({"HOME": self.home,
                   "KEMORY_URL": f"http://127.0.0.1:{self.port}"})
         e.update(extra)
@@ -1161,6 +1163,14 @@ class HookTest(unittest.TestCase):
         self.assertIn("kemory login", r.stdout)
         self.assertNotIn("KEMORY_URL is set", r.stdout)
 
+    def test_status_update_remedy_fits_the_surface(self):
+        r = self.run_script("status.sh", {}, KEMORY_API_KEY="k")
+        self.assertIn("/plugin update kemory@kemory", r.stdout)
+        r = self.run_script("status.sh", {}, KEMORY_API_KEY="k",
+                            CLAUDE_CODE_ENTRYPOINT="claude-desktop")
+        self.assertIn("'claude plugin update kemory@kemory' in a terminal", r.stdout)
+        self.assertNotIn("/plugin update", r.stdout)
+
     def test_self_hosted_host_is_left_alone(self):
         """Exact match only — a lookalike is somebody's own instance."""
         own = "https://kemory.internal.example.com"
@@ -1729,7 +1739,8 @@ class StaleVersionNoticeTest(unittest.TestCase):
             {"plugins": [{"name": name, "version": version}]}))
 
     def run_session_start(self, **extra):
-        e = {k: v for k, v in os.environ.items() if not k.startswith("KEMORY_")}
+        e = {k: v for k, v in os.environ.items()
+             if not k.startswith("KEMORY_") and k != "CLAUDE_CODE_ENTRYPOINT"}
         e.update({"HOME": self.home, "KEMORY_URL": "http://127.0.0.1:1"})
         e.update(extra)
         return subprocess.run([str(SCRIPTS / "session-start.sh")], input="{}",
@@ -1751,6 +1762,15 @@ class StaleVersionNoticeTest(unittest.TestCase):
         self.assertIn("99.0.0 available", msg)
         self.assertIn(self.installed_version(), msg)
         self.assertIn("/plugin update", msg, "a notice must name the remedy")
+
+    def test_desktop_names_a_command_it_can_run(self):
+        # The desktop app has no /plugin dialog; naming it there strands the
+        # person with a remedy they cannot type.
+        self.marketplace("99.0.0")
+        msg = self.message(self.run_session_start(
+            CLAUDE_CODE_ENTRYPOINT="claude-desktop"))
+        self.assertIn("claude plugin update kemory@kemory", msg)
+        self.assertNotIn("/plugin update", msg)
 
     def test_silent_when_up_to_date(self):
         self.marketplace(self.installed_version())

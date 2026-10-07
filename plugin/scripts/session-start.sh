@@ -169,7 +169,7 @@ if best is not None and best > here:
 KEMORY_VERSION_NOTICE=""
 KEMORY_STALE="$(find_stale_version)"
 if [ -n "$KEMORY_STALE" ]; then
-  KEMORY_VERSION_NOTICE="Kemory plugin: version ${KEMORY_STALE%% *} installed, ${KEMORY_STALE##* } available. Hooks are where this plugin's behaviour lives, so an old install quietly runs old behaviour. Update with /plugin update kemory@kemory, then restart. Silence this with KEMORY_QUIET_SETUP=1."
+  KEMORY_VERSION_NOTICE="Kemory plugin: version ${KEMORY_STALE%% *} installed, ${KEMORY_STALE##* } available. Hooks are where this plugin's behaviour lives, so an old install quietly runs old behaviour. Update with $(kemory_update_command), then restart. Silence this with KEMORY_QUIET_SETUP=1."
 fi
 
 # Session capture became the default in 0.8.0. An install that predates it was
