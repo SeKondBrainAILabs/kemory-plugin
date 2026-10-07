@@ -5,6 +5,17 @@ All notable changes to this project are documented here. This project follows
 
 ## [Unreleased]
 
+### Added
+- **A Kemory status line.** The hooks fail open, so a missing or rejected
+  credential, an unreachable API or an out-of-date plugin looked exactly like a
+  working install. On Claude Code 2.1.267 and later the plugin now shows
+  `Kemory ✓` under the prompt, the number of recalls this session, and a
+  `Kemory ✗ <reason>, run /kemory:status` line with a toast when something is
+  wrong. It also says when a newer plugin version is on `main`. It is a
+  function-hooks module (`hooks/register.ts`) named under `modules` in
+  `hooks.json`. Older Claude Code builds and Grok ignore that key and run the
+  command hooks unchanged.
+
 ### Fixed
 - **The plugin description still called session capture opt-in.** Capture has
   been on by default since 0.8.0, but the description in `plugin.json`, the
