@@ -17,9 +17,11 @@ All notable changes to this project are documented here. This project follows
 - **A Kemory status line.** The hooks fail open, so a missing or rejected
   credential, an unreachable API or an out-of-date plugin looked exactly like a
   working install. On Claude Code 2.1.267 and later the plugin now shows
-  `Kemory ✓` under the prompt, the number of recalls this session, and a
-  `Kemory ✗ <reason>, run /kemory:status` line with a toast when something is
-  wrong. It also says when a newer plugin version is on `main`. It is a
+  `✓` under the prompt, how many distinct memories were recalled this session
+  (by prompt recall and by the recall tools) and how many were saved, and a
+  `✗ <reason>, run /kemory:status` line with a toast when something is wrong.
+  The surface labels the line with the plugin name, so it reads `kemory ✓ · 14
+  recalled · 2 saved`. It also says when a newer plugin version is on `main`. It is a
   function-hooks module (`hooks/register.ts`) named under `modules` in
   `hooks.json`. Older Claude Code builds and Grok ignore that key and run the
   command hooks unchanged.

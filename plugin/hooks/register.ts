@@ -13,6 +13,9 @@ const LATEST_URL =
   'https://raw.githubusercontent.com/SeKondBrainAILabs/kemory-plugin/main/plugin/.claude-plugin/plugin.json'
 const RECHECK_MS = 10 * 60 * 1000
 const RECALL_TOOL = /^mcp__.*__kemory_(recall.*|ask|get_context|find_similar)$/
+const STORE_TOOL = /^mcp__.*__kemory_store_(memory|skill)$/
+// prompt-recall.sh lists each injected memory as "(memory_id: <uuid>)".
+const INJECTED_ID = /\(memory_id: ([0-9a-f-]{36})\)/g
 
 const CHECK = `
 . "$1/scripts/lib.sh" 2>/dev/null || { echo nolib; exit 0; }
@@ -59,13 +62,32 @@ function isOlder(installed: string, latest: string): boolean {
 // Module state: a hot reload starts it over, and the next check refills it.
 let problem: string | undefined
 let stale: string | undefined
-let recalls = 0
+const recalled = new Set<string>()
+let saved = 0
 
+// The surface already labels the line with the plugin's name, so the text
+// leads with the state alone.
 function draw($: Engine) {
-  const parts = [problem ? `Kemory ✗ ${problem}, run /kemory:status` : 'Kemory ✓']
-  if (!problem && recalls > 0) parts.push(`${recalls} recalls`)
+  const parts = [problem ? `✗ ${problem}, run /kemory:status` : '✓']
+  if (!problem && recalled.size > 0) parts.push(`${recalled.size} recalled`)
+  if (!problem && saved > 0) parts.push(`${saved} saved`)
   if (stale) parts.push(stale)
   $.ui.status(parts.join(' · '))
+}
+
+// A recall tool's text is JSON with a top-level `memories` list. Other lists in
+// it (cross_agent_context, shared_chats) are not what was asked for, so only
+// that one counts.
+function recalledIn(text: string | undefined): string[] {
+  try {
+    const memories = JSON.parse(text ?? '').memories
+
+    return Array.isArray(memories)
+      ? memories.map(m => m?.memory_id).filter((id): id is string => typeof id === 'string')
+      : []
+  } catch {
+    return []
+  }
 }
 
 async function check($: Engine) {
@@ -92,17 +114,34 @@ async function check($: Engine) {
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const result = await next(e)
-    $.ui.status('Kemory …')
+    $.ui.status('…')
     void check($)
     $.clock.every(RECHECK_MS, () => void check($))
 
     return result
   })
 
+  on('classic.UserPromptSubmit', async ($, e, next) => {
+    const result = await next(e)
+    const before = recalled.size
+    for (const context of result.additionalContext ?? []) {
+      for (const [, id] of context.matchAll(INJECTED_ID)) recalled.add(id)
+    }
+    if (recalled.size !== before) draw($)
+
+    return result
+  })
+
   on('tool.call', async ($, e, next) => {
     const result = await next(e)
-    if (RECALL_TOOL.test(e.tool) && !('deny' in result)) {
-      recalls += 1
+    if (result.deny !== undefined || result.isError) return result
+
+    if (RECALL_TOOL.test(e.tool)) {
+      const before = recalled.size
+      for (const id of recalledIn(result.text)) recalled.add(id)
+      if (recalled.size !== before) draw($)
+    } else if (STORE_TOOL.test(e.tool)) {
+      saved += 1
       draw($)
     }
 
