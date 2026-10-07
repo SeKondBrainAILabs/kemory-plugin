@@ -1,5 +1,8 @@
 {
-  "description": "Kemory: persistent memory for Claude Code. Hooks whose output is READ \u2014 SessionStart, UserPromptSubmit, PreToolUse \u2014 must stay synchronous: an async hook's stdout is discarded, which would silently kill context injection and the read-only auto-approval while still appearing to run. They fail open instead, with every network call capped (3-6s) so a dead network never stalls a session. Capture writes and has no output anyone reads, so it runs async on both Stop and SessionEnd.",
+  "description": "Kemory: persistent memory for Claude Code. Hooks whose output is READ \u2014 SessionStart, UserPromptSubmit, PreToolUse \u2014 must stay synchronous: an async hook's stdout is discarded, which would silently kill context injection and the read-only auto-approval while still appearing to run. They fail open instead, with every network call capped (3-6s) so a dead network never stalls a session. Capture writes and has no output anyone reads, so it runs async on both Stop and SessionEnd. The status line is a function-hooks module (register.ts) named under \"modules\": Claude Code 2.1.267+ loads it, and older Claude Code builds and Grok ignore the key and run the command hooks unchanged.",
+  "modules": [
+    "./register.ts"
+  ],
   "hooks": {
     "SessionStart": [
       {
