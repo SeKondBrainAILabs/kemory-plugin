@@ -26,6 +26,17 @@ KEMORY_DEFAULT_URL="${KEMORY_DEFAULT_URL:-https://api.kemory.s9n.ai}"
 # Answers in KEMORY_RETARGETED_URL rather than on stdout: a command
 # substitution would run this in a subshell and lose the
 # KEMORY_URL_RETARGETED_FROM breadcrumb, leaving a silent rewrite.
+# How to update the plugin, said so the person can act on it where they are.
+# `/plugin` is a terminal dialog; the desktop app (CLAUDE_CODE_ENTRYPOINT is
+# claude-desktop there) has no such command, so it gets the CLI form.
+kemory_update_command() {
+  if [ "${CLAUDE_CODE_ENTRYPOINT:-}" = "claude-desktop" ]; then
+    printf '%s' "'claude plugin update kemory@kemory' in a terminal"
+  else
+    printf '%s' "/plugin update kemory@kemory"
+  fi
+}
+
 kemory_retarget_url() {
   KEMORY_RETARGETED_URL="$1"
   case "$1" in

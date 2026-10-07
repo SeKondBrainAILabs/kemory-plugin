@@ -6,6 +6,10 @@ All notable changes to this project are documented here. This project follows
 ## [Unreleased]
 
 ### Fixed
+- **The session-start notice and `/kemory:status` named `/plugin update` in
+  the desktop app too.** Under `CLAUDE_CODE_ENTRYPOINT=claude-desktop` they
+  now say to run `claude plugin update kemory@kemory` in a terminal. The
+  README says the same.
 - **The status line told desktop users to run a command they cannot type.**
   `/plugin` is a terminal dialog, and the desktop app has no such command. A
   session drawn only in the desktop app is now told `update: claude plugin

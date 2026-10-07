@@ -98,6 +98,12 @@ you ran it.
 /plugin update kemory@kemory
 ```
 
+The desktop app has no `/plugin` command. There, run this in a terminal:
+
+```
+claude plugin update kemory@kemory
+```
+
 Restart Claude Code afterwards to load the new hooks. `/kemory:status` prints
 the version you are on, and [CHANGELOG.md](CHANGELOG.md) says what moved.
 

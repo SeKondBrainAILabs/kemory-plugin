@@ -281,7 +281,7 @@ info "run /mcp to confirm which kemory server Claude is actually talking to"
 manifest="$DIR/../.claude-plugin/plugin.json"
 if [ -r "$manifest" ] && command -v python3 >/dev/null 2>&1; then
   installed=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("version",""))' "$manifest" 2>/dev/null)
-  [ -n "$installed" ] && info "plugin version $installed — '/plugin update kemory@kemory' to move it"
+  [ -n "$installed" ] && info "plugin version $installed — $(kemory_update_command) to move it"
 fi
 
 # --- capture ---------------------------------------------------------------
