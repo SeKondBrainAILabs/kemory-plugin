@@ -2641,5 +2641,138 @@ class SkippedServerTest(unittest.TestCase):
                          "the cache file was rewritten")
 
 
+class ConnectorStatusTest(unittest.TestCase):
+    """/kemory:status on a machine where a claude.ai connector has connected.
+
+    claudeAiMcpEverConnected only ever grows, so it can say a connector has
+    connected once but not that it is on now. Status reports it as history and
+    the launcher must keep serving on every shape of it.
+    """
+
+    CONNECTOR = "claude.ai Kemory by SeKondBrain"
+    # A closed local port: curl fails fast and nothing does a DNS lookup.
+    mine = "http://127.0.0.1:9"
+
+    def setUp(self):
+        self.home = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.home, ignore_errors=True)
+        self.config = pathlib.Path(self.home) / ".claude.json"
+
+    def env(self, **extra):
+        e = {k: v for k, v in os.environ.items() if not k.startswith("KEMORY_")}
+        path = ":".join(d for d in os.environ.get("PATH", "").split(":")
+                        if not (pathlib.Path(d) / "kemory").exists())
+        e.update({"HOME": self.home, "CLAUDE_PROJECT_DIR": self.home,
+                  "PATH": path, "KEMORY_URL": self.mine, "KEMORY_API_KEY": "k"})
+        e.update(extra)
+        return e
+
+    def write_config(self, blob):
+        self.config.write_text(json.dumps(blob))
+
+    def status(self, **extra):
+        return subprocess.run([str(SCRIPTS / "status.sh")], input="{}", text=True,
+                              capture_output=True, env=self.env(**extra))
+
+    def launch(self, **extra):
+        return subprocess.run([str(SCRIPTS / "mcp.sh")], input="", text=True,
+                              capture_output=True, env=self.env(**extra))
+
+    def assertCouldNotTell(self, r):
+        self.assertEqual(r.returncode, 0)
+        self.assertNotIn("Traceback", r.stdout + r.stderr)
+        self.assertIn("could not tell", r.stdout)
+        self.assertIn("~/.claude.json", r.stdout)
+        self.assertNotIn("has connected", r.stdout)
+        self.assertNotIn("no claude.ai Kemory connector", r.stdout)
+
+    def fixtures(self):
+        """Each shape of the key, written to ~/.claude.json in turn."""
+        yield {"claudeAiMcpEverConnected": ["claude.ai Gmail", self.CONNECTOR]}
+        yield {"claudeAiMcpEverConnected": ["claude.ai Gmail"]}
+        yield {"numStartups": 3}
+        yield {"claudeAiMcpEverConnected": "claude.ai Kemory"}
+        yield {"claudeAiMcpEverConnected": {"claude.ai Kemory": True}}
+
+    def test_status_names_a_connector_that_has_connected(self):
+        self.write_config({"claudeAiMcpEverConnected":
+                           ["claude.ai Gmail", self.CONNECTOR]})
+        r = self.status()
+        self.assertEqual(r.returncode, 0)
+        self.assertIn(self.CONNECTOR, r.stdout)
+        self.assertIn("has connected", r.stdout)
+        self.assertIn("/mcp", r.stdout)
+
+    def test_status_says_no_connector_when_the_list_has_none(self):
+        self.write_config({"claudeAiMcpEverConnected": ["claude.ai Gmail", 7]})
+        r = self.status()
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("no claude.ai Kemory connector has connected", r.stdout)
+        self.assertNotIn("has connected on this machine", r.stdout)
+
+    def test_status_says_no_connector_when_the_key_is_missing(self):
+        self.write_config({"numStartups": 3})
+        r = self.status()
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("no claude.ai Kemory connector has connected", r.stdout)
+        self.assertNotIn("has connected on this machine", r.stdout)
+
+    def test_status_does_not_guess_on_a_non_list_value(self):
+        for value in ("claude.ai Kemory", {"claude.ai Kemory": True}):
+            with self.subTest(value=value):
+                self.write_config({"claudeAiMcpEverConnected": value})
+                self.assertCouldNotTell(self.status())
+
+    def test_status_does_not_guess_on_a_non_json_file(self):
+        self.config.write_text("{not json")
+        self.assertCouldNotTell(self.status())
+
+    def test_status_does_not_guess_on_an_unreadable_file(self):
+        # Non-JSON content, so this holds even when root can read the file.
+        self.config.write_text("{not json")
+        self.config.chmod(0o000)
+        self.assertCouldNotTell(self.status())
+
+    def test_status_does_not_guess_on_a_missing_file(self):
+        self.assertCouldNotTell(self.status())
+
+    def test_status_no_longer_says_it_cannot_see_the_connector(self):
+        for blob in self.fixtures():
+            with self.subTest(blob=blob):
+                self.write_config(blob)
+                self.assertNotIn("cannot be seen from here", self.status().stdout)
+        self.config.write_text("{not json")
+        self.assertNotIn("cannot be seen from here", self.status().stdout)
+
+    def test_status_names_the_serving_entry_when_standing_down(self):
+        self.write_config({
+            "claudeAiMcpEverConnected": [self.CONNECTOR],
+            "mcpServers": {"kemory": {"type": "http",
+                                      "url": f"{self.mine}/mcp/v1"}}})
+        r = self.status()
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("stand down", r.stdout)
+        self.assertIn("'kemory'", r.stdout)
+        self.assertIn(str(self.config), r.stdout)
+        self.assertIn(self.CONNECTOR, r.stdout)
+
+    def test_launcher_serves_on_every_connector_fixture(self):
+        for blob in self.fixtures():
+            with self.subTest(blob=blob):
+                self.write_config(blob)
+                self.assertNotIn("standing down", self.launch().stderr)
+        self.config.write_text("{not json")
+        self.assertNotIn("standing down", self.launch().stderr)
+
+    def test_launcher_serves_with_allow_duplicate_and_a_connector(self):
+        self.write_config({
+            "claudeAiMcpEverConnected": [self.CONNECTOR],
+            "mcpServers": {"kemory": {"type": "http",
+                                      "url": f"{self.mine}/mcp/v1"}}})
+        self.assertIn("standing down", self.launch().stderr)
+        r = self.launch(KEMORY_ALLOW_DUPLICATE="1")
+        self.assertNotIn("standing down", r.stderr)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

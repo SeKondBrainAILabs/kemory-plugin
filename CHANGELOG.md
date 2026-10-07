@@ -5,6 +5,14 @@ All notable changes to this project are documented here. This project follows
 
 ## [Unreleased]
 
+### Changed
+- **`/kemory:status` reports a claude.ai Kemory connector that has connected.**
+  It no longer says the connector "cannot be seen from here". It reads
+  `claudeAiMcpEverConnected` in `~/.claude.json` and says whether a Kemory
+  connector has connected on this machine, or that it could not tell. That list
+  only grows, so it is history, not proof the connector is on: the bundled
+  server still serves when a connector is present, and status tells you to
+  disable one of the two under `/mcp`.
 ### Added
 - **A Kemory status line.** The hooks fail open, so a missing or rejected
   credential, an unreachable API or an out-of-date plugin looked exactly like a

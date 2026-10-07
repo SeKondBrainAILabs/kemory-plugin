@@ -254,16 +254,27 @@ else:
 fi
 
 # Entries for a DIFFERENT Kemory are deliberate multi-env work, not a fault, so
-# they are counted rather than warned about. A claude.ai connector lives inside
-# Claude and is invisible from a shell, which is why it is named here instead.
+# they are counted rather than warned about. A claude.ai connector is not an
+# entry in those files; the only trace is that it has connected before, which is
+# history, not proof it is on in this session, so it is reported as such below.
 others=$(kemory_count_mcp_entries)
 if [ "${others:-0}" -gt 0 ] && [ -z "$duplicate" ]; then
   if [ "$others" -eq 1 ]; then noun="entry"; else noun="entries"; fi
   info "$others other kemory MCP $noun on this machine, pointing elsewhere"
   info "if one of them is meant to be this Kemory, keep a single server"
 fi
-info "using the claude.ai connector as well? that cannot be seen from here —"
-info "disable the bundled server under /mcp so you are not running two"
+connector=$(kemory_connector_ever_connected)
+case "$connector" in
+  seen*)
+    info "'${connector#seen	}' has connected to Claude Code on this machine"
+    info "if it is on in this session you are running two Kemory servers —"
+    info "disable one of the two under /mcp" ;;
+  never)
+    info "no claude.ai Kemory connector has connected to Claude Code on this machine" ;;
+  *)
+    info "could not tell from ~/.claude.json whether a claude.ai Kemory connector"
+    info "is in use — the file is missing, unreadable or not in the expected shape" ;;
+esac
 info "run /mcp to confirm which kemory server Claude is actually talking to"
 
 # --- plugin version --------------------------------------------------------
