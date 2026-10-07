@@ -3,6 +3,21 @@
 All notable changes to this project are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+- **The status line told desktop users to run a command they cannot type.**
+  `/plugin` is a terminal dialog, and the desktop app has no such command. A
+  session drawn only in the desktop app is now told `update: claude plugin
+  update kemory@kemory`, which runs in any terminal.
+- **The update notice outlived the update.** After an update the running
+  session still loads the old version, so the line kept saying the plugin was
+  behind. It now reads `plugin <version> installed, open a new session to
+  apply`.
+- **A failure in the band or toast hooks could cost the prompt or tool call
+  they watch.** Both hooks now catch their own failure and hand back what the
+  call already returned, without running it twice.
+
 ## [0.10.0] — 2026-10-07
 
 ### Added
