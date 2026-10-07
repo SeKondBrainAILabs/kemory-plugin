@@ -3,6 +3,22 @@
 All notable changes to this project are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- **The memories in context, above the prompt.** After each prompt, a band
+  lists what prompt recall put in front of the model, as namespace and title
+  (the first sentence), up to three rows with `+N more`. It goes away when a
+  prompt recalls nothing, and `Hide` turns it off for the session.
+- **A toast for each save.** `kemory_store_memory` and `kemory_store_skill`
+  show `Saved to <namespace>: "<title>"`, or `Updated in <namespace> (v2)`
+  when the server folded the write into an existing memory.
+
+### Fixed
+- **The status-line module named a type the engine does not export.**
+  `Engine` is the test kit's type. The module now uses `EngineInterface` and
+  type-checks clean against the engine's declarations. Runtime was unaffected.
+
 ## [0.9.0] — 2026-10-07
 
 ### Changed
