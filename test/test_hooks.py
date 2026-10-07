@@ -1763,11 +1763,11 @@ class StaleVersionNoticeTest(unittest.TestCase):
         self.assertNotIn("available", self.message(self.run_session_start()))
 
     def test_compares_numerically_not_as_text(self):
-        self.marketplace("0.10.0")
-        msg = self.message(self.run_session_start())
-        # 0.10.0 beats every 0.x.y this plugin has shipped, and a string
-        # compare would rank it below 0.4.0.
-        self.assertIn("0.10.0 available", msg)
+        # The installed version is the repo's own, 0.10.0 or later. 0.9.99 is
+        # older as a number but sorts after "0.10.0" as text, so a string
+        # compare would announce a downgrade as an update.
+        self.marketplace("0.9.99")
+        self.assertNotIn("available", self.message(self.run_session_start()))
 
     def test_matches_the_plugin_not_the_directory(self):
         # A user may add the marketplace under any name.

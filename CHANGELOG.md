@@ -3,7 +3,7 @@
 All notable changes to this project are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.10.0] — 2026-10-07
 
 ### Added
 - **The memories in context, above the prompt.** After each prompt, a band
