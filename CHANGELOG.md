@@ -3,7 +3,7 @@
 All notable changes to this project are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.9.0] — 2026-10-07
 
 ### Changed
 - **`/kemory:status` reports a claude.ai Kemory connector that has connected.**
@@ -13,6 +13,7 @@ All notable changes to this project are documented here. This project follows
   only grows, so it is history, not proof the connector is on: the bundled
   server still serves when a connector is present, and status tells you to
   disable one of the two under `/mcp`.
+
 ### Added
 - **A Kemory status line.** The hooks fail open, so a missing or rejected
   credential, an unreachable API or an out-of-date plugin looked exactly like a
