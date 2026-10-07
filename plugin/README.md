@@ -44,7 +44,8 @@ the same resolution.
 If you get the tools another way — the claude.ai connector, `kemory connect`,
 or your own entry — disable the bundled server so you do not run two. Two
 servers means two copies of every tool in each request; `/kemory:status`
-counts the entries it can see on disk.
+counts the entries it can see on disk and reports a Kemory connector that has
+connected before.
 
 If no Kemory server is connected, every hook no-ops rather than erroring.
 

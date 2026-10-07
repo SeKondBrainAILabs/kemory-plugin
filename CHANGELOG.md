@@ -5,6 +5,15 @@ All notable changes to this project are documented here. This project follows
 
 ## [Unreleased]
 
+### Changed
+- **`/kemory:status` reports a claude.ai Kemory connector that has connected.**
+  It no longer says the connector "cannot be seen from here". It reads
+  `claudeAiMcpEverConnected` in `~/.claude.json` and says whether a Kemory
+  connector has connected on this machine, or that it could not tell. That list
+  only grows, so it is history, not proof the connector is on: the bundled
+  server still serves when a connector is present, and status tells you to
+  disable one of the two under `/mcp`.
+
 ### Fixed
 - **The plugin description still called session capture opt-in.** Capture has
   been on by default since 0.8.0, but the description in `plugin.json`, the

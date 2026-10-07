@@ -255,9 +255,9 @@ PY
 # entry from the pre-plugin docs is still in place, and nothing surfaces it:
 # /mcp lists them without saying they are the same server twice.
 #
-# Counts on-disk entries only. A claude.ai connector lives inside Claude and is
-# invisible from a shell, so callers must name that case separately rather than
-# reporting a reassuring zero.
+# Counts on-disk entries only. A claude.ai connector is not an entry in any of
+# these files, so callers name that case separately (kemory_connector_ever_connected)
+# rather than reporting a reassuring zero.
 #
 # Echoes the count. The plugin's own bundled entry is not in these files.
 kemory_count_mcp_entries() {
@@ -298,6 +298,39 @@ for path in candidates:
         if isinstance(proj, dict):
             total += count(proj.get("mcpServers"))
 print(total)
+PY
+}
+
+# Has a claude.ai Kemory connector ever connected to Claude Code on this machine?
+#
+# claudeAiMcpEverConnected in ~/.claude.json only ever grows, so it records that
+# a connector connected once, not that it is on in this session. Report it as
+# history; never stand a server down on it.
+#
+# Echoes "seen<TAB><entry>" for the first Kemory entry, or "never" when the file
+# parses and holds none. Echoes nothing when it cannot tell: a missing, unreadable
+# or non-JSON file, or a key that is not a list.
+kemory_connector_ever_connected() {
+  command -v python3 >/dev/null 2>&1 || return 0
+  python3 - <<'PY' 2>/dev/null
+import json, os
+
+try:
+    with open(os.path.expanduser("~/.claude.json")) as fh:
+        data = json.load(fh)
+except Exception:
+    raise SystemExit(0)
+if not isinstance(data, dict):
+    raise SystemExit(0)
+entries = data.get("claudeAiMcpEverConnected")
+if "claudeAiMcpEverConnected" not in data:
+    print("never")
+elif isinstance(entries, list):
+    for entry in entries:
+        if isinstance(entry, str) and "kemory" in entry.lower():
+            print("seen\t" + entry)
+            raise SystemExit(0)
+    print("never")
 PY
 }
 
