@@ -115,22 +115,47 @@ function saveNotice(input: Record<string, unknown>, text: string): string {
   return subject ? `${what}: "${titleOf(subject as string)}"` : what
 }
 
+// What the last update put on disk. The running session keeps the version it
+// loaded until a new session starts, so the two can differ.
+async function versionOnDisk($: Engine): Promise<string | undefined> {
+  try {
+    const home = await $.env.get('HOME')
+    const plugins = JSON.parse(await $.fs.read(`${home}/.claude/plugins/installed_plugins.json`)).plugins ?? {}
+    const key = Object.keys(plugins).find(k => k.startsWith('kemory@'))
+    const entries = key ? plugins[key] : undefined
+
+    return Array.isArray(entries) ? entries[0]?.version : undefined
+  } catch {
+    return undefined
+  }
+}
+
+// `/plugin` is a terminal dialog. The desktop app has no such command, so a
+// session drawn only there is told to use the CLI.
+async function updateHint($: Engine): Promise<string> {
+  const surfaces = await $.session.surfaces()
+
+  return surfaces.includes('terminal')
+    ? 'run /plugin update kemory@kemory'
+    : 'update: claude plugin update kemory@kemory'
+}
+
 async function check($: Engine) {
   const root = $.plugin.root
-  const [run, installed, latest] = await Promise.all([
+  const [run, installed, latest, onDisk] = await Promise.all([
     $.process
       .run(['bash', '-c', CHECK, 'kemory-status', root], { timeoutMs: 20000 })
       .catch(() => undefined),
     versionAt($, `${root}/.claude-plugin/plugin.json`),
     versionAt($, LATEST_URL),
+    versionOnDisk($),
   ])
   const code = run?.stdout.trim() || '000'
   const was = problem
   problem = code === '200' ? undefined : (PROBLEMS[code] ?? `API returned HTTP ${code}`)
-  stale =
-    installed && latest && isOlder(installed, latest)
-      ? `plugin ${installed} → ${latest}, run /plugin update kemory@kemory`
-      : undefined
+  if (!installed || !latest || !isOlder(installed, latest)) stale = undefined
+  else if (onDisk && !isOlder(onDisk, latest)) stale = `plugin ${onDisk} installed, open a new session to apply`
+  else stale = `plugin ${installed} → ${latest}, ${await updateHint($)}`
 
   if (problem && problem !== was) $.ui.toast(`Kemory: ${problem}`)
   draw($)
@@ -146,6 +171,9 @@ export const register: Register = on => {
     return result
   })
 
+  // A display must never cost the prompt or the tool call it watches: if a
+  // hook below throws, its catch hands back what `next` settled to (replayed,
+  // never run twice).
   on('classic.UserPromptSubmit', async ($, e, next) => {
     const result = await next(e)
     const before = recalled.size
@@ -161,7 +189,7 @@ export const register: Register = on => {
     $.ui.invalidate('ui.render')
 
     return result
-  })
+  }).catch(($, e, next) => next(e))
 
   on('ui.render', { component: 'AbovePrompt' }, ($, e, next) => {
     if (e.props.hasSurvey || isBandHidden || inContext.length === 0) return next(e)
@@ -212,5 +240,5 @@ export const register: Register = on => {
     }
 
     return result
-  })
+  }).catch(($, e, next) => next(e))
 }
