@@ -3,7 +3,7 @@
 All notable changes to this project are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.11.0] — 2026-10-11
 
 ### Added
 - **A Kemory panel.** `/kemory:memories` lists what Kemory saved and recalled
