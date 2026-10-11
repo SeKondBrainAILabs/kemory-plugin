@@ -394,20 +394,28 @@ async function brief($: Engine) {
   redraw($)
 }
 
+const COMMANDS = [
+  { name: 'kemory-memories', description: 'Show what Kemory saved and recalled in this session' },
+  { name: 'remember', description: 'Save text to Kemory, or the last reply when given none', argumentHint: '[text]' },
+  { name: 'kemory-learned', description: 'Suggest memories worth keeping from this session' },
+]
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const result = await next(e)
     $.ui.status('…')
     void check($)
     $.clock.every(RECHECK_MS, () => void check($))
-    await $.command.register({ name: 'kemory-memories', description: 'Show what Kemory saved and recalled in this session' })
-    await $.command.register({
-      name: 'remember',
-      description: 'Save text to Kemory, or the last reply when given none',
-      argumentHint: '[text]',
-    })
-    await $.command.register({ name: 'kemory-learned', description: 'Suggest memories worth keeping from this session' })
     void brief($)
+    // Each command on its own: a name another plugin already holds is refused
+    // with a throw, and that must cost that one command, not the rest of start.
+    for (const command of COMMANDS) {
+      try {
+        await $.command.register(command)
+      } catch {
+        // the name is taken; the panel stays reachable from the band's Open
+      }
+    }
 
     return result
   })
