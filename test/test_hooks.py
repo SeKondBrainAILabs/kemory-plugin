@@ -619,9 +619,10 @@ class HookTest(unittest.TestCase):
         for tool in ("recall", "recall_memory", "get_context", "ask",
                      "find_similar", "get_compressed", "get_raw",
                      "get_session_context", "get_namespace_summary"):
-            name = f"mcp__plugin_kemory_kemory__kemory_{tool}"
-            with self.subTest(tool=tool):
-                self.assertTrue(rx.match(name), f"{tool} not covered by matcher")
+            # Claude Code names, and Grok Build's <server>__<tool> with no mcp__.
+            for name in (f"mcp__plugin_kemory_kemory__kemory_{tool}", f"kemory__kemory_{tool}"):
+                with self.subTest(name=name):
+                    self.assertTrue(rx.match(name), f"{name} not covered by matcher")
 
     def test_rate_reminder_matcher_excludes_writes(self):
         # kemory_memory is an alias of kemory_store_memory. Reminding the agent
@@ -632,9 +633,9 @@ class HookTest(unittest.TestCase):
         rx = re.compile(hooks["hooks"]["PostToolUse"][0]["matcher"])
         for tool in ("memory", "store_memory", "store_skill", "delete_memory",
                      "forget", "rate_memory", "consolidate_session"):
-            name = f"mcp__plugin_kemory_kemory__kemory_{tool}"
-            with self.subTest(tool=tool):
-                self.assertIsNone(rx.match(name), f"{tool} is a write")
+            for name in (f"mcp__plugin_kemory_kemory__kemory_{tool}", f"kemory__kemory_{tool}"):
+                with self.subTest(name=name):
+                    self.assertIsNone(rx.match(name), f"{name} is a write")
 
     def test_injection_hooks_are_synchronous(self):
         # An async hook's stdout is discarded, so an async SessionStart /
@@ -1012,8 +1013,14 @@ class HookTest(unittest.TestCase):
                     self.assertIsNone(self._decision(self.approve(name).stdout),
                                       f"{tool} is a write and must still prompt")
 
+    def test_approve_covers_grok_tool_names(self):
+        # Grok Build names an MCP tool <server>__<tool>, with no mcp__ prefix.
+        self.assertEqual(self._decision(self.approve("kemory__kemory_recall_memory").stdout), "allow")
+        self.assertIsNone(self._decision(self.approve("kemory__kemory_store_memory").stdout),
+                          "a write must still prompt under Grok's names too")
+
     def test_approve_ignores_non_kemory_tools(self):
-        for name in ("Bash", "Read", "mcp__other__search_memory"):
+        for name in ("Bash", "Read", "mcp__other__search_memory", "other__search_memory"):
             with self.subTest(tool=name):
                 self.assertIsNone(self._decision(self.approve(name).stdout))
 

@@ -3,6 +3,16 @@
 All notable changes to this project are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+- **Under Grok Build, the tool hooks never fired.** Grok names an MCP tool
+  `<server>__<tool>` (`kemory__kemory_recall_memory`), with no `mcp__` prefix,
+  so the matchers for auto-approving read-only Kemory calls and for the rating
+  reminder matched nothing. Both matchers and the auto-approve check now take
+  Grok's names. Verified in Grok 1.0.46: Kemory tool hooks ran 11 times in a
+  session where they had run none.
+
 ## [0.11.0] — 2026-10-11
 
 ### Added
