@@ -29,7 +29,7 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "mcp__.*__(kemory|s9nmem)_.*",
+        "matcher": "(mcp__.*__|[A-Za-z0-9-]+__)(kemory|s9nmem)_.*",
         "hooks": [
           {
             "type": "command",
@@ -41,7 +41,7 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "mcp__.*__kemory_(recall.*|ask|find_similar|get_.*)",
+        "matcher": "(mcp__.*__|[A-Za-z0-9-]+__)kemory_(recall.*|ask|find_similar|get_.*)",
         "hooks": [
           {
             "type": "command",
