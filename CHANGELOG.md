@@ -21,6 +21,15 @@ All notable changes to this project are documented here. This project follows
   reminder matched nothing. Both matchers and the auto-approve check now take
   Grok's names. Verified in Grok 1.0.46: Kemory tool hooks ran 11 times in a
   session where they had run none.
+- **One set of Kemory tools when the claude.ai connector is live.** With the
+  connector and the plugin both on, every request carried the same 25
+  `kemory_*` tools twice. On Claude Code 2.1.267 and later the plugin now
+  checks whether a Kemory connector answers a live call in this session, and
+  if it does, moves its own copies behind tool search, pointing the model at
+  the connector's, and the status line says `via connector`. A connector that
+  is installed but switched off, or that refuses the call, changes nothing.
+  `KEMORY_ALLOW_DUPLICATE=1` keeps both in front. The plugin's server keeps
+  running, because a module cannot stop it, and the panel's actions use it.
 
 ## [0.11.0] — 2026-10-11
 
