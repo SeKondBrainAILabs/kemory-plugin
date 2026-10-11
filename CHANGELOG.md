@@ -18,8 +18,9 @@ All notable changes to this project are documented here. This project follows
   model for up to three memories from the session, each with Save and Skip.
   After five quiet minutes with three or more new turns it also runs unasked
   and says so in a toast. Each run is one model call over the session.
-- **A brief for the repo.** Before the first prompt, the band shows what
-  Kemory knows about the repository the session runs in.
+- **A brief for the repo.** Before the first prompt, the band shows up to
+  three strong matches for the repository the session runs in, and nothing
+  when no memory clears the cutoff. Automatic session summaries are left out.
 
 ## [0.10.1] — 2026-10-07
 

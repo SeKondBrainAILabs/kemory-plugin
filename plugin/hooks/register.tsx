@@ -27,6 +27,11 @@ const PANE = 'kemory-memories'
 // The plugin's own MCP server, which the panel's actions go through.
 const SERVER = 'plugin:kemory:kemory'
 const NAMESPACE = 'shared'
+// The repo brief shows only strong matches: a folder name alone is a weak query,
+// and below this a search returns whatever happens to be nearest.
+const BRIEF_MIN_SIMILARITY = 0.55
+// Automatic session summaries say what a session was about, not what is true.
+const BRIEF_SKIP_NAMESPACE = /^user:sessions/
 const IDLE_MS = 5 * 60 * 1000
 const MIN_TURNS_FOR_SUGGESTIONS = 3
 
@@ -164,14 +169,19 @@ function textOf(result: { content: unknown[] }): string {
 // A recall tool's text is JSON with a top-level `memories` list. Other lists in
 // it (cross_agent_context, shared_chats) are not what was asked for, so only
 // that one counts.
-function memoriesIn(text: string | undefined): { namespace: string; content: string; id: string }[] {
+function memoriesIn(text: string | undefined): { namespace: string; content: string; id: string; similarity: number }[] {
   try {
     const memories = JSON.parse(text ?? '').memories
     if (!Array.isArray(memories)) return []
 
     return memories
       .filter(m => typeof m?.memory_id === 'string' && typeof m?.content === 'string')
-      .map(m => ({ namespace: String(m.namespace ?? ''), content: m.content as string, id: m.memory_id as string }))
+      .map(m => ({
+        namespace: String(m.namespace ?? ''),
+        content: m.content as string,
+        id: m.memory_id as string,
+        similarity: typeof m.similarity_score === 'number' ? m.similarity_score : 0,
+      }))
   } catch {
     return []
   }
@@ -371,11 +381,14 @@ async function brief($: Engine) {
   repoName = root.split('/').filter(Boolean).pop() ?? ''
   if (!repoName) return
   const result = await $.mcp.call(SERVER, 'kemory_recall_memory', {
-    query: `${repoName} project decisions setup gotchas`,
-    limit: 3,
+    query: `${repoName} repository: how it is set up, decisions and gotchas`,
+    limit: 8,
   })
   if (result.isError) return
-  for (const m of memoriesIn(textOf(result))) {
+  const strong = memoriesIn(textOf(result))
+    .filter(m => m.similarity >= BRIEF_MIN_SIMILARITY && !BRIEF_SKIP_NAMESPACE.test(m.namespace))
+    .slice(0, 3)
+  for (const m of strong) {
     add({ key: m.id, id: m.id, kind: 'brief', namespace: m.namespace, title: titleOf(m.content), text: m.content })
   }
   redraw($)
@@ -446,6 +459,9 @@ export const register: Register = on => {
   // never run twice).
   on('classic.UserPromptSubmit', async ($, e, next) => {
     const result = await next(e)
+    // A prompt ends the repo brief. Marked here as well as at prompt.submit,
+    // which a session hosted by the desktop app was seen not to raise.
+    hasPrompted = true
     inContext = []
     for (const context of result.additionalContext ?? []) {
       for (const [, namespace = '', content, id] of context.matchAll(INJECTED)) {
@@ -516,6 +532,15 @@ export const register: Register = on => {
         {more > 0 && <Text dimColor>  +{more} more</Text>}
       </Box>
     )
+  })
+
+  // A group of calls draws as one count line ("Used 2 tools"). Unfolded, each
+  // call is its own row, and a Kemory call's row can draw as a card.
+  on('ui.render', { component: 'ToolGroup' }, ($, e, next) => {
+    const holdsKemory = e.props.calls.some(c => !!c.tool_use_id && byCall.has(c.tool_use_id))
+    if (!holdsKemory || e.props.isExpanded) return next(e)
+
+    return next({ ...e, props: { ...e.props, isExpanded: true } })
   })
 
   // The transcript row of a save or recall becomes a card: one line closed,
