@@ -89,6 +89,21 @@ servers through its own config, so you get the memory *tools* there and none of
 the hooks. Claude Code on the web cannot install plugins either, and claude.ai
 chat has no hooks — use the Kemory connector on both.
 
+### Other tools
+
+This plugin runs where a host loads plugin hooks: Claude Code and Grok Build.
+Cursor, Codex, Claude Desktop and other MCP clients do not load these hooks,
+so they get Kemory's memory *tools* over MCP, without prompt recall, capture
+or the in-app panel:
+
+- **claude.ai, Claude Desktop, ChatGPT and other apps with connectors:** add
+  the Kemory connector in that app's connector settings.
+- **Cursor, Continue, Warp:** `kemory mcp install --host cursor` (or
+  `continue`, `warp`, `all`) writes the MCP entry for you.
+- **Codex and other MCP clients:** add Kemory's MCP server to the client's own
+  config by hand; `kemory mcp install --config <file>` writes it to a path you
+  name.
+
 ## Staying current
 
 Plugins do not update themselves; an install keeps the hook set from the day
