@@ -153,13 +153,6 @@ function toggle($: Engine, key: string) {
   redraw($)
 }
 
-function label(e: Entry): string {
-  if (e.isDeleted) return `Deleted · ${e.title}`
-  const verb = { saved: 'Saved to', updated: 'Updated in', recalled: 'Recalled from', brief: 'For this repo, from' }[e.kind]
-
-  return `${verb} ${e.namespace || 'kemory'} · ${e.title}`
-}
-
 function textOf(result: { content: unknown[] }): string {
   return (result.content as { type?: string; text?: unknown }[])
     .map(b => (b.type === 'text' && typeof b.text === 'string' ? b.text : ''))
@@ -394,6 +387,116 @@ async function brief($: Engine) {
   redraw($)
 }
 
+// Look and feel. Kemory's accent, and one stable color per namespace so the
+// same namespace reads the same everywhere.
+const ACCENT = '#a78bfa'
+const CHIP_COLORS = ['#a78bfa', '#60a5fa', '#34d399', '#fbbf24', '#f472b6', '#22d3ee']
+// The dashboard has no page for a single memory; its memories view filters
+// by namespace, so a memory links to its namespace there.
+const DASHBOARD = 'https://app.kemory.ai/memories'
+
+function chipColor(namespace: string): string {
+  let hash = 0
+  for (const c of namespace) hash = (hash * 31 + c.charCodeAt(0)) >>> 0
+
+  return CHIP_COLORS[hash % CHIP_COLORS.length] ?? ACCENT
+}
+
+function dashboardLink(namespace: string): string {
+  return namespace ? `${DASHBOARD}?ns=${encodeURIComponent(namespace)}` : DASHBOARD
+}
+
+function verb(e: Entry): string {
+  if (e.isDeleted) return 'Deleted'
+
+  return { saved: 'Saved', updated: 'Updated', recalled: 'Recalled', brief: 'About this repo' }[e.kind]
+}
+
+// The session's activity as three rings (saved, recalled, rated), drawn
+// where the surface takes SVG.
+function activityRing(saved: number, recalled: number, rated: number): string {
+  const ring = (r: number, value: number, color: string) => {
+    const length = 2 * Math.PI * r
+    const share = Math.min(1, value / Math.max(10, saved + recalled + rated))
+    return (
+      `<circle cx="36" cy="36" r="${r}" fill="none" stroke="${color}" stroke-opacity="0.18" stroke-width="6"/>` +
+      `<circle cx="36" cy="36" r="${r}" fill="none" stroke="${color}" stroke-width="6" stroke-linecap="round" ` +
+      `stroke-dasharray="${(share * length).toFixed(1)} ${length.toFixed(1)}" transform="rotate(-90 36 36)"/>`
+    )
+  }
+
+  return (
+    '<svg xmlns="http://www.w3.org/2000/svg" width="72" height="72" viewBox="0 0 72 72">' +
+    ring(30, saved, '#a78bfa') +
+    ring(21, recalled, '#60a5fa') +
+    ring(12, rated, '#34d399') +
+    '</svg>'
+  )
+}
+
+// One memory as a card: a header line that opens and closes it, and when
+// open, its text as Markdown, its actions, and a link to it in Kemory.
+// Elements are the drawing surface's own, passed in by the hook.
+// biome-ignore lint/suspicious/noExplicitAny: the element table differs per surface
+function memoryCard($: Engine, els: Record<string, any>, m: Entry, at: string) {
+  const { Box, Button, Text, Markdown, Link } = els
+  const isShown = isOpen.has(m.key) && !m.isDeleted
+
+  return (
+    <Box
+      key={`box-${at}-${m.key}`}
+      flexDirection="column"
+      borderStyle="round"
+      borderColor={m.isDeleted ? undefined : ACCENT}
+      borderDimColor={m.isDeleted}
+      paddingX={1}
+      marginY={0}
+    >
+      <Box gap={1}>
+        <Text color={ACCENT}>◆</Text>
+        <Text dimColor>{verb(m)}</Text>
+        <Box backgroundColor={chipColor(m.namespace)} paddingX={1}>
+          <Text color="#111111">{m.namespace || 'kemory'}</Text>
+        </Box>
+        <Button
+          key={`open-${at}-${m.key}`}
+          plain
+          dimColor={m.isDeleted}
+          label={`${isOpen.has(m.key) ? '▾' : '▸'} ${m.title}`}
+          onPress={() => toggle($, m.key)}
+        />
+      </Box>
+      {isShown && <Markdown key={`md-${at}-${m.key}`} text={m.text.slice(0, 9000)} />}
+      {isShown && (
+        <Box gap={1}>
+          {m.id && m.kind !== 'saved' && m.kind !== 'updated' && (
+            <Button
+              key={`up-${at}-${m.key}`}
+              label={m.rating === 'up' ? '✓ Helpful' : 'Helpful'}
+              onPress={() => rate($, m.key, 'up')}
+            />
+          )}
+          {m.id && (
+            <Button
+              key={`down-${at}-${m.key}`}
+              label={m.rating === 'down' ? '✓ Outdated' : 'Outdated'}
+              onPress={() => rate($, m.key, 'down')}
+            />
+          )}
+          {m.id && (
+            <Button
+              key={`del-${at}-${m.key}`}
+              label={m.isConfirmingDelete ? 'Confirm delete' : 'Delete'}
+              onPress={() => remove($, m.key)}
+            />
+          )}
+          <Link key={`link-${at}-${m.key}`} href={dashboardLink(m.namespace)} label="Open in Kemory ↗" />
+        </Box>
+      )}
+    </Box>
+  )
+}
+
 const COMMANDS = [
   { name: 'kemory-memories', description: 'Show what Kemory saved and recalled in this session' },
   { name: 'remember', description: 'Save text to Kemory, or the last reply when given none', argumentHint: '[text]' },
@@ -505,7 +608,7 @@ export const register: Register = on => {
   }).catch(($, e, next) => next(e))
 
   // Above the prompt: the repo brief until the first prompt, then what each
-  // prompt's recall put in context.
+  // prompt's recall put in context, as a row of namespace chips and titles.
   on('ui.render', { component: 'AbovePrompt' }, ($, e, next) => {
     if (e.props.hasSurvey || isBandHidden) return next(e)
     const { Box, Button, Text } = $.ui.resolve(e)
@@ -513,13 +616,16 @@ export const register: Register = on => {
     const shown = hasPrompted ? inContext.map(find).filter((x): x is Entry => !!x) : briefs
     if (shown.length === 0) return next(e)
     const noun = shown.length === 1 ? 'memory' : 'memories'
-    const heading = hasPrompted ? `Kemory put ${shown.length} ${noun} in context` : `Kemory knows this about ${repoName}`
+    const heading = hasPrompted ? `${shown.length} ${noun} in context` : `knows this about ${repoName}`
     const more = shown.length - BAND_ROWS
 
     return (
-      <Box flexDirection="column">
-        <Box>
-          <Text dimColor>{heading} </Text>
+      <Box flexDirection="column" borderStyle="round" borderColor={ACCENT} paddingX={1}>
+        <Box gap={1}>
+          <Text color={ACCENT} bold>
+            ◆ Kemory
+          </Text>
+          <Text dimColor>{heading}</Text>
           <Button key="band-open" label="Open" dimColor onPress={() => $.ui.open({ id: PANE, title: 'Kemory' })} />
           <Button
             key="band-hide"
@@ -532,12 +638,14 @@ export const register: Register = on => {
           />
         </Box>
         {shown.slice(0, BAND_ROWS).map(m => (
-          <Text wrap="truncate-end">
-            <Text dimColor>· {m.namespace ? `${m.namespace}  ` : ''}</Text>
-            {m.title}
-          </Text>
+          <Box key={`band-${m.key}`} gap={1}>
+            <Box backgroundColor={chipColor(m.namespace)} paddingX={1}>
+              <Text color="#111111">{m.namespace || 'kemory'}</Text>
+            </Box>
+            <Text wrap="truncate-end">{m.title}</Text>
+          </Box>
         ))}
-        {more > 0 && <Text dimColor>  +{more} more</Text>}
+        {more > 0 && <Text dimColor>+{more} more in the panel</Text>}
       </Box>
     )
   })
@@ -551,113 +659,87 @@ export const register: Register = on => {
     return next({ ...e, props: { ...e.props, isExpanded: true } })
   })
 
-  // The transcript row of a save or recall becomes a card: one line closed,
-  // the full text and its actions open.
+  // The transcript row of a save or recall becomes one card per memory.
   on('ui.render', { component: 'ToolUse' }, ($, e, next) => {
     const keys = byCall.get(e.props.tool_use_id)
     if (!keys || keys.length === 0) return next(e)
-    const { Box, Button, Text } = $.ui.resolve(e)
+    const els = $.ui.resolve(e)
+    const { Box } = els
     const shown = keys.map(find).filter((x): x is Entry => !!x)
-    const at = e.props.tool_use_id
 
-    return (
-      <Box flexDirection="column">
-        {shown.map(m => (
-          <Box flexDirection="column">
-            <Button
-              key={`card-${at}-${m.key}`}
-              plain
-              dimColor={m.isDeleted}
-              label={`${isOpen.has(m.key) ? '▾' : '▸'} ${label(m)}`}
-              onPress={() => toggle($, m.key)}
-            />
-            {isOpen.has(m.key) && !m.isDeleted && <Text dimColor>{m.text}</Text>}
-            {isOpen.has(m.key) && !m.isDeleted && m.id && (
-              <Box>
-                {m.kind !== 'saved' && m.kind !== 'updated' && (
-                  <Button
-                    key={`card-up-${at}-${m.key}`}
-                    label={m.rating === 'up' ? '✓ Helpful' : 'Helpful'}
-                    onPress={() => rate($, m.key, 'up')}
-                  />
-                )}
-                <Button
-                  key={`card-down-${at}-${m.key}`}
-                  label={m.rating === 'down' ? '✓ Outdated' : 'Outdated'}
-                  onPress={() => rate($, m.key, 'down')}
-                />
-                <Button
-                  key={`card-del-${at}-${m.key}`}
-                  label={m.isConfirmingDelete ? 'Confirm delete' : 'Delete'}
-                  onPress={() => remove($, m.key)}
-                />
-              </Box>
-            )}
-          </Box>
-        ))}
-      </Box>
-    )
+    return <Box flexDirection="column">{shown.map(m => memoryCard($, els, m, e.props.tool_use_id))}</Box>
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, ($, e) => {
-    const { Box, Button, Text } = $.ui.resolve(e)
+    const els = $.ui.resolve(e)
+    const { Box, Button, Text } = els
+    const saved = count(['saved', 'updated'])
+    const recalled = count(['recalled'])
+    const rated = entries.filter(m => m.rating).length
     const open = suggestions.filter(s => s.state !== 'skipped')
+    const svg = 'Svg' in els ? (els as unknown as { Svg: (p: Record<string, unknown>) => never }).Svg : undefined
 
     return (
-      <Box flexDirection="column">
-        <Text bold>
-          This session: {count(['saved', 'updated'])} saved · {count(['recalled'])} recalled
-        </Text>
-        <Box>
-          <Button key="pane-learn" label={isSuggesting ? 'Thinking…' : 'What did we learn?'} onPress={() => suggest($, true)} />
-          <Button key="pane-save-reply" label="Save last reply" onPress={() => saveLastReply($)} />
-        </Box>
-        {open.length > 0 && <Text bold>Suggested</Text>}
-        {open.map(s => (
+      <Box flexDirection="column" gap={1}>
+        <Box gap={2} alignItems="center" borderStyle="round" borderColor={ACCENT} paddingX={1}>
+          {svg &&
+            svg({
+              key: 'ring',
+              source: activityRing(saved, recalled, rated),
+              alt: `This session: ${saved} saved, ${recalled} recalled, ${rated} rated`,
+              width: 72,
+              height: 72,
+            })}
           <Box flexDirection="column">
-            <Text dimColor={s.state === 'saved'}>
-              {s.state === 'saved' ? '✓ ' : '· '}
-              {titleOf(s.text)}
+            <Text color={ACCENT} bold>
+              ◆ Kemory · this session
             </Text>
-            {s.state !== 'saved' && (
-              <Box>
-                <Button
-                  key={`sug-save-${s.key}`}
-                  label={s.state === 'saving' ? 'Saving…' : 'Save'}
-                  variant="primary"
-                  onPress={() => saveSuggestion($, s.key)}
-                />
-                <Button key={`sug-skip-${s.key}`} label="Skip" onPress={() => skipSuggestion($, s.key)} />
-              </Box>
-            )}
+            <Text>
+              <Text color="#a78bfa">● {saved} saved</Text>
+              {'   '}
+              <Text color="#60a5fa">● {recalled} recalled</Text>
+              {'   '}
+              <Text color="#34d399">● {rated} rated</Text>
+            </Text>
+            <Box gap={1}>
+              <Button
+                key="pane-learn"
+                variant="primary"
+                label={isSuggesting ? 'Thinking…' : 'What did we learn?'}
+                onPress={() => suggest($, true)}
+              />
+              <Button key="pane-save-reply" label="Save last reply" onPress={() => saveLastReply($)} />
+            </Box>
           </Box>
-        ))}
-        {entries.length === 0 && <Text dimColor>Nothing saved or recalled yet.</Text>}
-        {[...entries].reverse().map(m => (
-          <Box flexDirection="column">
-            <Button
-              key={`pane-${m.key}`}
-              plain
-              dimColor={m.isDeleted}
-              label={`${isOpen.has(m.key) ? '▾' : '▸'} ${label(m)}${m.rating === 'up' ? '  ✓ helpful' : m.rating === 'down' ? '  ✓ outdated' : ''}`}
-              onPress={() => toggle($, m.key)}
-            />
-            {isOpen.has(m.key) && !m.isDeleted && <Text dimColor>{m.text}</Text>}
-            {isOpen.has(m.key) && !m.isDeleted && m.id && (
-              <Box>
-                {m.kind !== 'saved' && m.kind !== 'updated' && (
-                  <Button key={`pane-up-${m.key}`} label="Helpful" onPress={() => rate($, m.key, 'up')} />
+        </Box>
+        {open.length > 0 && (
+          <Box flexDirection="column" borderStyle="round" borderColor="#fbbf24" paddingX={1}>
+            <Text color="#fbbf24" bold>
+              ✦ Suggested memories
+            </Text>
+            {open.map(s => (
+              <Box key={`sug-${s.key}`} flexDirection="column">
+                <Text dimColor={s.state === 'saved'}>
+                  {s.state === 'saved' ? '✓ ' : '· '}
+                  {titleOf(s.text)}
+                </Text>
+                {s.state !== 'saved' && (
+                  <Box gap={1}>
+                    <Button
+                      key={`sug-save-${s.key}`}
+                      label={s.state === 'saving' ? 'Saving…' : 'Save'}
+                      variant="primary"
+                      onPress={() => saveSuggestion($, s.key)}
+                    />
+                    <Button key={`sug-skip-${s.key}`} label="Skip" onPress={() => skipSuggestion($, s.key)} />
+                  </Box>
                 )}
-                <Button key={`pane-down-${m.key}`} label="Outdated" onPress={() => rate($, m.key, 'down')} />
-                <Button
-                  key={`pane-del-${m.key}`}
-                  label={m.isConfirmingDelete ? 'Confirm delete' : 'Delete'}
-                  onPress={() => remove($, m.key)}
-                />
               </Box>
-            )}
+            ))}
           </Box>
-        ))}
+        )}
+        {entries.length === 0 && <Text dimColor>Nothing saved or recalled yet.</Text>}
+        {[...entries].reverse().map(m => memoryCard($, els, m, 'pane'))}
       </Box>
     )
   })
