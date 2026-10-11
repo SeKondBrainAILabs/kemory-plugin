@@ -26,6 +26,13 @@ const BAND_ROWS = 3
 const PANE = 'kemory-memories'
 // The plugin's own MCP server, which the panel's actions go through.
 const SERVER = 'plugin:kemory:kemory'
+// How the plugin's own server names its tools to the model.
+const OWN_TOOL_PREFIX = 'mcp__plugin_kemory_kemory__'
+// Another server offering Kemory's tools: the claude.ai connector, named by
+// its display name in a terminal and by its connector id in the desktop app.
+const OTHER_KEMORY = /^mcp__(.+)__kemory_whoami$/
+// The first prompts look again, since a connector can attach after start.
+const CONNECTOR_PROMPT_CHECKS = 3
 const NAMESPACE = 'shared'
 // The repo brief shows only strong matches: a folder name alone is a weak query,
 // and below this a search returns whatever happens to be nearest.
@@ -72,6 +79,12 @@ type Suggestion = { key: string; text: string; state: 'new' | 'saving' | 'saved'
 
 // Module state: a hot reload starts it over, and the next check refills it.
 let problem: string | undefined
+// The tool-name spelling of a Kemory connector that answered a live call in
+// this session, or undefined. Only a live answer counts: a connector that is
+// installed but switched off, or refuses the call, must leave the plugin's own
+// tools in place, or the session ends up with no Kemory tools at all.
+let connector: string | undefined
+let connectorChecks = 0
 let stale: string | undefined
 const entries: Entry[] = []
 const byCall = new Map<string, string[]>()
@@ -138,6 +151,7 @@ function draw($: Engine) {
   const parts = [problem ? `✗ ${problem}, run /kemory:status` : '✓']
   if (!problem && recalled > 0) parts.push(`${recalled} recalled`)
   if (!problem && saved > 0) parts.push(`${saved} saved`)
+  if (!problem && connector) parts.push('via connector')
   if (stale) parts.push(stale)
   $.ui.status(parts.join(' · '))
 }
@@ -246,6 +260,30 @@ async function check($: Engine) {
 
   if (problem && problem !== was) $.ui.toast(`Kemory: ${problem}`)
   draw($)
+}
+
+// One Kemory server is enough. When the claude.ai connector is live in this
+// session, the plugin's own copies of the same 25 tools move behind tool
+// search and point at the connector's, so requests stop carrying both.
+// The plugin's server keeps running: a module cannot stop it, and the panel's
+// actions still use it. KEMORY_ALLOW_DUPLICATE=1 keeps both in front.
+async function findConnector($: Engine) {
+  if (connector) return
+  connectorChecks += 1
+  if ((await $.env.get('KEMORY_ALLOW_DUPLICATE')) === '1') return
+  const tools = await $.tool.list()
+  const servers = tools
+    .map(t => t.name.match(OTHER_KEMORY)?.[1])
+    .filter((s): s is string => !!s && !`mcp__${s}__`.startsWith(OWN_TOOL_PREFIX))
+  for (const server of new Set(servers)) {
+    const answer = await $.mcp.call(server, 'kemory_whoami', {}).catch(() => undefined)
+    if (answer && !answer.isError) {
+      connector = server
+      $.ui.invalidate('tool.describe')
+      draw($)
+      return
+    }
+  }
 }
 
 // A person's verdict on a memory, sent through the plugin's server.
@@ -504,6 +542,7 @@ export const register: Register = on => {
     void check($)
     $.clock.every(RECHECK_MS, () => void check($))
     void brief($)
+    void findConnector($)
 
     return result
   })
@@ -558,6 +597,7 @@ export const register: Register = on => {
   // never run twice).
   on('classic.UserPromptSubmit', async ($, e, next) => {
     const result = await next(e)
+    if (!connector && connectorChecks < CONNECTOR_PROMPT_CHECKS) await findConnector($)
     // A prompt ends the repo brief. Marked here as well as at prompt.submit,
     // which a session hosted by the desktop app was seen not to raise.
     hasPrompted = true
@@ -593,6 +633,17 @@ export const register: Register = on => {
     redraw($)
 
     return result
+  }).catch(($, e, next) => next(e))
+
+  on('tool.describe', async ($, e, next) => {
+    const described = await next(e)
+    if (!connector || !e.tool.startsWith(OWN_TOOL_PREFIX)) return described
+    const twin = `mcp__${connector}__${e.tool.slice(OWN_TOOL_PREFIX.length)}`
+
+    return {
+      description: `Same tool as ${twin}, which the claude.ai Kemory connector serves in this session; use that one. ${described.description}`,
+      isDeferred: true,
+    }
   }).catch(($, e, next) => next(e))
 
   // Above the prompt: the repo brief until the first prompt, then what each
