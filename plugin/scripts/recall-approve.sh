@@ -26,8 +26,9 @@ import json, os, re
 
 # Hosted Kemory exposes kemory_*; the community edition exposes the same tools
 # as s9nmem_*. Server prefixes vary too (direct config, plugin-scoped, or the
-# claude.ai connector), hence the permissive middle segment.
-TOOL_NAME = re.compile(r"^mcp__.*__(?:kemory|s9nmem)_(.+)$")
+# claude.ai connector), hence the permissive middle segment. Grok Build names
+# an MCP tool <server>__<tool> with no mcp__ prefix (kemory__kemory_recall_memory).
+TOOL_NAME = re.compile(r"^(?:mcp__.*__|[A-Za-z0-9-]+__)(?:kemory|s9nmem)_(.+)$")
 
 # Read-only. Verified against the live tool descriptions rather than inferred
 # from the names — see the kemory_memory note in the header.
