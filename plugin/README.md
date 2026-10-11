@@ -110,6 +110,7 @@ are skipped. A memory injected once is not injected again in the same session.
 | `KEMORY_PROMPT_RECALL` | `1` | Set to `0` to disable prompt recall |
 | `KEMORY_PROMPT_RECALL_LIMIT` | `5` | Maximum memories injected per prompt |
 | `KEMORY_PROMPT_RECALL_MIN_RELEVANCE` | `0.55` | Raw-cosine relevance floor (not the blended `min_score`) |
+| `KEMORY_PROMPT_RECALL_SHORT_MIN_RELEVANCE` | `0.65` | The floor for prompts under six words, which name little topic |
 | `KEMORY_PROMPT_RECALL_ITEM_CHARS` | `600` | Per-memory truncation in the injected block |
 | `KEMORY_PROMPT_RECALL_NAMESPACE` | all | Restrict recall to one namespace |
 | `KEMORY_PROMPT_RECALL_TIMEOUT` | `3` | Seconds to wait for the API |
