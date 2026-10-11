@@ -6,15 +6,15 @@ All notable changes to this project are documented here. This project follows
 ## [Unreleased]
 
 ### Added
-- **A Kemory panel.** `/kemory-memories` lists what Kemory saved and recalled
+- **A Kemory panel.** `/kemory:memories` lists what Kemory saved and recalled
   in this session. Each memory opens to its full text with Helpful, Outdated
   and Delete (Delete asks to confirm). The band above the prompt has an `Open`
   button for it.
 - **Cards in the transcript.** Each save and recall row closes to one line,
   `Saved to shared · <title>`, and opens to the full text and the same actions.
-- **Saving without asking the model.** `/remember <text>` saves the text, and
-  `/remember` alone or `Save last reply` in the panel saves Claude's last reply.
-- **Suggested memories.** `/kemory-learned` or `What did we learn?` asks the
+- **Saving without asking the model.** `/kemory:remember <text>` saves the text, and
+  `/kemory:remember` alone or `Save last reply` in the panel saves Claude's last reply.
+- **Suggested memories.** `/kemory:learned` or `What did we learn?` asks the
   model for up to three memories from the session, each with Save and Skip.
   After five quiet minutes with three or more new turns it also runs unasked
   and says so in a toast. Each run is one model call over the session.

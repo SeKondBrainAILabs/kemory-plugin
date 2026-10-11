@@ -346,7 +346,7 @@ async function suggest($: Engine, isAsked: boolean) {
   ]
   if (fresh.length > 0) {
     const noun = fresh.length === 1 ? 'memory' : 'memories'
-    $.ui.toast(`Kemory: ${fresh.length} suggested ${noun}, see /kemory-memories`, { timeoutMs: 8000 })
+    $.ui.toast(`Kemory: ${fresh.length} suggested ${noun}, see /kemory:memories`, { timeoutMs: 8000 })
   } else if (isAsked) {
     $.ui.toast('Kemory: nothing new worth saving')
   }
@@ -497,12 +497,6 @@ function memoryCard($: Engine, els: Record<string, any>, m: Entry, at: string) {
   )
 }
 
-const COMMANDS = [
-  { name: 'kemory-memories', description: 'Show what Kemory saved and recalled in this session' },
-  { name: 'remember', description: 'Save text to Kemory, or the last reply when given none', argumentHint: '[text]' },
-  { name: 'kemory-learned', description: 'Suggest memories worth keeping from this session' },
-]
-
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const result = await next(e)
@@ -510,38 +504,32 @@ export const register: Register = on => {
     void check($)
     $.clock.every(RECHECK_MS, () => void check($))
     void brief($)
-    // Each command on its own: a name another plugin already holds is refused
-    // with a throw, and that must cost that one command, not the rest of start.
-    for (const command of COMMANDS) {
-      try {
-        await $.command.register(command)
-      } catch {
-        // the name is taken; the panel stays reachable from the band's Open
-      }
-    }
 
     return result
   })
 
-  on('command.run', { command: 'kemory-memories' }, async $ => {
+  // The plugin's own commands (commands/*.md), answered here where the module
+  // runs; elsewhere their files run as prompts. Shipping them as files is what
+  // lists them in the command picker, which runtime-registered commands miss.
+  on('command.run', { command: 'kemory:memories' }, async $ => {
     await $.ui.open({ id: PANE, title: 'Kemory' })
 
     return { text: 'Kemory panel opened.' }
-  })
+  }).catch(($, e, next) => next(e))
 
-  on('command.run', { command: 'remember' }, async ($, e) => {
+  on('command.run', { command: 'kemory:remember' }, async ($, e) => {
     const text = e.args.trim() || (await lastReply($))
     if (!text) return { text: 'Nothing to save: no text given and no reply yet.' }
 
     return { text: (await save($, text)) ? `Saved to ${NAMESPACE}: ${titleOf(text)}` : 'Save failed.' }
-  })
+  }).catch(($, e, next) => next(e))
 
-  on('command.run', { command: 'kemory-learned' }, async $ => {
+  on('command.run', { command: 'kemory:learned' }, async $ => {
     await $.ui.open({ id: PANE, title: 'Kemory' })
     await suggest($, true)
 
     return { text: 'Suggested memories are in the Kemory panel.' }
-  })
+  }).catch(($, e, next) => next(e))
 
   on('prompt.submit', async ($, e, next) => {
     idleTimer?.cancel()
