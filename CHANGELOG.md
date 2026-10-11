@@ -3,6 +3,17 @@
 All notable changes to this project are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+- **The update notice fits the status line.** It read `plugin 0.10.1 → 0.11.0,
+  update: claude …`, cut off before the command. The status line now says
+  `↑ 0.11.0 available`, and the full command, for the terminal or the desktop
+  app, appears once per release in a toast.
+- **The README says where the plugin runs.** A new "Other tools" section sends
+  Cursor, Continue and Warp to `kemory mcp install`, and Codex and other MCP
+  clients to their own MCP config.
+
 ## [0.11.0] — 2026-10-11
 
 ### Added

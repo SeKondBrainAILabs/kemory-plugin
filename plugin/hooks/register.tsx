@@ -73,6 +73,9 @@ type Suggestion = { key: string; text: string; state: 'new' | 'saving' | 'saved'
 // Module state: a hot reload starts it over, and the next check refills it.
 let problem: string | undefined
 let stale: string | undefined
+// The version the full update command was last shown for, so the toast that
+// carries it appears once per session per release, not on every recheck.
+let toldUpdateFor: string | undefined
 const entries: Entry[] = []
 const byCall = new Map<string, string[]>()
 const isOpen = new Set<string>()
@@ -223,8 +226,8 @@ async function updateHint($: Engine): Promise<string> {
   const surfaces = await $.session.surfaces()
 
   return surfaces.includes('terminal')
-    ? 'run /plugin update kemory@kemory'
-    : 'update: claude plugin update kemory@kemory'
+    ? 'Run /plugin update kemory@kemory, then restart.'
+    : "Run 'claude plugin update kemory@kemory' in a terminal, then open a new session."
 }
 
 async function check($: Engine) {
@@ -240,9 +243,17 @@ async function check($: Engine) {
   const code = run?.stdout.trim() || '000'
   const was = problem
   problem = code === '200' ? undefined : (PROBLEMS[code] ?? `API returned HTTP ${code}`)
+  // The status line is narrow and cannot be clicked, so it carries only the
+  // fact; the command, which does not fit there, goes in a toast.
   if (!installed || !latest || !isOlder(installed, latest)) stale = undefined
-  else if (onDisk && !isOlder(onDisk, latest)) stale = `plugin ${onDisk} installed, open a new session to apply`
-  else stale = `plugin ${installed} → ${latest}, ${await updateHint($)}`
+  else if (onDisk && !isOlder(onDisk, latest)) stale = `${onDisk} installed, new session to apply`
+  else {
+    stale = `↑ ${latest} available`
+    if (toldUpdateFor !== latest) {
+      toldUpdateFor = latest
+      $.ui.toast(`Kemory ${latest} is out (you have ${installed}). ${await updateHint($)}`, { timeoutMs: 12000 })
+    }
+  }
 
   if (problem && problem !== was) $.ui.toast(`Kemory: ${problem}`)
   draw($)
