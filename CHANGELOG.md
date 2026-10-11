@@ -3,7 +3,7 @@
 All notable changes to this project are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.11.1] — 2026-10-11
 
 ### Changed
 - **The update notice fits the status line.** It read `plugin 0.10.1 → 0.11.0,
