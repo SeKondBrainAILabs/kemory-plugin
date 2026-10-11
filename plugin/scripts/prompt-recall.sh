@@ -30,12 +30,13 @@ export KEMORY_SCRIPT_DIR="$DIR"
 export PYTHONDONTWRITEBYTECODE=1
 export KEMORY_RECALL_LIMIT="${KEMORY_PROMPT_RECALL_LIMIT:-5}"
 export KEMORY_RECALL_MIN_RELEVANCE="${KEMORY_PROMPT_RECALL_MIN_RELEVANCE:-0.55}"
+export KEMORY_RECALL_SHORT_MIN_RELEVANCE="${KEMORY_PROMPT_RECALL_SHORT_MIN_RELEVANCE:-0.65}"
 export KEMORY_RECALL_ITEM_CHARS="${KEMORY_PROMPT_RECALL_ITEM_CHARS:-600}"
 export KEMORY_RECALL_TIMEOUT="${KEMORY_PROMPT_RECALL_TIMEOUT:-3}"
 export KEMORY_RECALL_NAMESPACE="${KEMORY_PROMPT_RECALL_NAMESPACE:-}"
 
 python3 <<'PY' 2>/dev/null
-import hashlib, json, os, sys, urllib.request
+import hashlib, json, os, re, sys, urllib.request
 
 sys.path.insert(0, os.environ["KEMORY_SCRIPT_DIR"])
 from redact import redact  # noqa: E402
@@ -45,6 +46,15 @@ from redact import redact  # noqa: E402
 MAX_QUERY = 1000
 MIN_PROMPT = 12
 MAX_SEEN = 500
+# A prompt this short names little topic, so memories that merely sit nearest
+# clear the normal floor; it must match more closely to be recalled.
+SHORT_PROMPT_WORDS = 6
+# Replies that steer the conversation and carry no topic of their own.
+ACK_WORDS = {
+    "ok", "okay", "yes", "yep", "yeah", "sure", "no", "go", "ahead", "do", "it",
+    "continue", "proceed", "next", "thanks", "thank", "you", "great", "good",
+    "sounds", "fine", "please", "done", "and", "now", "then", "that", "this",
+}
 
 
 def die():
@@ -85,6 +95,14 @@ session_id = hook.get("session_id") or ""
 if len(prompt) < MIN_PROMPT or prompt[0] in "/!#":
     die()
 
+words = re.findall(r"[a-z0-9']+", prompt.lower())
+# "ok go ahead", "yes do it please": nothing to search for.
+if words and all(w in ACK_WORDS for w in words):
+    die()
+floor = env_float("KEMORY_RECALL_MIN_RELEVANCE", 0.55)
+if len(words) < SHORT_PROMPT_WORDS:
+    floor = max(floor, env_float("KEMORY_RECALL_SHORT_MIN_RELEVANCE", 0.65))
+
 query = redact(prompt)[:MAX_QUERY]
 
 body = {
@@ -95,7 +113,7 @@ body = {
     # gates the blended rank_score, only ~35% of which is relevance, so
     # recency and access count can carry an unrelated memory over it.
     # min_relevance is the raw-cosine floor, applied before the blend.
-    "min_relevance": env_float("KEMORY_RECALL_MIN_RELEVANCE", 0.55),
+    "min_relevance": floor,
     # Archived memories are hidden by decay on purpose; don't resurrect them.
     "archived": "live",
 }

@@ -27,6 +27,13 @@ All notable changes to this project are documented here. This project follows
   three strong matches for the repository the session runs in, and nothing
   when no memory clears the cutoff. Automatic session summaries are left out.
 
+### Fixed
+- **Short prompts recalled unrelated memories.** A prompt such as "save a test
+  memory" names no topic, so whatever sat nearest cleared the 0.55 floor (an
+  unrelated CapX note in a plugin session). Prompts under six words now need
+  0.65 (`KEMORY_PROMPT_RECALL_SHORT_MIN_RELEVANCE`), and a bare acknowledgement
+  ("ok go ahead") skips recall.
+
 ## [0.10.1] — 2026-10-07
 
 ### Fixed

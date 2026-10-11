@@ -852,6 +852,29 @@ class HookTest(unittest.TestCase):
         self.assertEqual(body["search_mode"], "hybrid")
         self.assertEqual(body["archived"], "live")
 
+    def test_prompt_recall_keeps_the_normal_floor_for_a_specific_prompt(self):
+        Recorder.search_payload = self._hit()
+        self.recall()
+        self.assertEqual(self.searches()[0]["min_relevance"], 0.55)
+
+    def test_prompt_recall_raises_the_floor_for_a_short_prompt(self):
+        # "save a test memory" names no topic: at 0.55 it recalled an
+        # unrelated CapX Grafana note in a plugin session.
+        Recorder.search_payload = self._hit()
+        self.recall(prompt="save a test memory")
+        self.assertEqual(self.searches()[0]["min_relevance"], 0.65)
+
+    def test_prompt_recall_skips_a_bare_acknowledgement(self):
+        Recorder.search_payload = self._hit()
+        r = self.recall(prompt="ok go ahead, do it please")
+        self.assertEqual(self.searches(), [], "an acknowledgement has nothing to search for")
+        self.assertEqual(r.stdout.strip(), "")
+
+    def test_prompt_recall_short_floor_is_configurable(self):
+        Recorder.search_payload = self._hit()
+        self.recall(prompt="save a test memory", KEMORY_PROMPT_RECALL_SHORT_MIN_RELEVANCE="0.7")
+        self.assertEqual(self.searches()[0]["min_relevance"], 0.7)
+
     def test_prompt_recall_truncates_query_to_server_limit(self):
         Recorder.search_payload = self._hit()
         self.recall(prompt="x" * 5000)
