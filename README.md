@@ -58,7 +58,9 @@ if you install the CLI later it finds you already signed in.
 line that says whether Kemory works, the memories in context above the prompt,
 cards on each save and recall, and `/kemory-plus:memories`, a panel to review,
 rate, save and delete memories. It also auto-approves read-only Kemory tools so
-recall costs no permission prompt. It needs `kemory` installed:
+recall costs no permission prompt. It needs `kemory` installed, and lives in
+its own repository,
+[kemory-plus](https://github.com/SeKondBrainAILabs/kemory-plus):
 
 ```
 /plugin install kemory-plus@kemory

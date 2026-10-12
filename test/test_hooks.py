@@ -12,6 +12,7 @@ import os
 import pathlib
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -20,9 +21,6 @@ import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / "plugin" / "scripts"
-# kemory-plus: the module and read-only auto-approval, shipped beside kemory.
-PLUS_SCRIPTS = ROOT / "plus" / "scripts"
-PLUS_HOOKS = ROOT / "plus" / "hooks" / "hooks.json"
 
 
 class Recorder(http.server.BaseHTTPRequestHandler):
@@ -642,21 +640,19 @@ class HookTest(unittest.TestCase):
 
     def test_injection_hooks_are_synchronous(self):
         # An async hook's stdout is discarded, so an async SessionStart /
-        # UserPromptSubmit / PreToolUse would inject nothing while still
-        # appearing to run — the failure is invisible.
+        # UserPromptSubmit would inject nothing while still appearing to run —
+        # the failure is invisible.
         hooks = json.loads((ROOT / "plugin" / "hooks" / "hooks.json").read_text())
-        plus = json.loads(PLUS_HOOKS.read_text())
-        for source, event in (("kemory", "SessionStart"), ("kemory", "UserPromptSubmit"),
-                              ("kemory-plus", "PreToolUse")):
-            for group in (hooks if source == "kemory" else plus)["hooks"][event]:
+        for event in ("SessionStart", "UserPromptSubmit"):
+            for group in hooks["hooks"][event]:
                 for hook in group["hooks"]:
-                    with self.subTest(source=source, event=event):
+                    with self.subTest(event=event):
                         self.assertNotEqual(hook.get("async"), True)
 
     def test_core_plugin_holds_no_approval_hook_or_module(self):
         # The plugin directory holds back any version whose hooks approve
-        # tool calls or that ships a mod. Both live in kemory-plus so that
-        # kemory itself can reach users.
+        # tool calls or that ships a mod. Both live in kemory-plus, a separate
+        # repository, so that kemory itself can reach users.
         hooks = json.loads((ROOT / "plugin" / "hooks" / "hooks.json").read_text())
         self.assertNotIn("PreToolUse", hooks["hooks"])
         self.assertNotIn("modules", hooks)
@@ -973,84 +969,6 @@ class HookTest(unittest.TestCase):
         r = self.run_script("prompt-recall.sh",
                             {"session_id": "s", "prompt": self.PROMPT})
         self.assertEqual(r.stdout.strip(), "")
-
-    # --- read-only auto-approval (PreToolUse) -----------------------------
-    READ_ONLY = ("recall", "recall_memory", "get_context", "ask",
-                 "find_similar", "get_compressed", "get_raw",
-                 "get_session_context", "get_namespace_summary", "get_profile",
-                 "get_user_context", "get_history", "list_namespaces",
-                 "list_projects", "list_skills", "whoami", "check_access",
-                 "rehydrate_session_sources")
-    # kemory_memory is "Save one memory. Friendly alias of kemory_store_memory"
-    # — it requires memory:write despite reading like a read. rate_memory is a
-    # write whose rows move an org-level indicator.
-    WRITES = ("memory", "store_memory", "store_skill", "capture_session",
-              "consolidate_session", "delete_memory", "forget",
-              "promote_memory", "resolve_conflict", "rate_memory")
-
-    def approve(self, tool_name, **extra):
-        payload = {"session_id": "s", "hook_event_name": "PreToolUse",
-                   "tool_name": tool_name, "tool_input": {}}
-        payload.update(extra)
-        return subprocess.run([str(PLUS_SCRIPTS / "recall-approve.sh")],
-                              input=json.dumps(payload), text=True,
-                              capture_output=True, env=self.env())
-
-    def _decision(self, stdout):
-        try:
-            return json.loads(stdout)["hookSpecificOutput"]["permissionDecision"]
-        except Exception:
-            return None
-
-    def test_approve_matches_real_payload(self):
-        fixture = json.loads((ROOT / "test" / "fixtures" /
-                              "pretooluse-kemory-recall.json").read_text())
-        self.assertIsInstance(fixture["tool_input"], dict,
-                              "fixture must keep the real payload shape")
-        r = subprocess.run([str(PLUS_SCRIPTS / "recall-approve.sh")],
-                           input=json.dumps(fixture), text=True,
-                           capture_output=True, env=self.env())
-        self.assertEqual(self._decision(r.stdout), "allow")
-        self.assertIn("hybrid search", json.loads(r.stdout)["systemMessage"])
-
-    def test_approve_allows_every_read_only_tool(self):
-        for prefix in ("kemory", "s9nmem"):
-            for tool in self.READ_ONLY:
-                name = f"mcp__plugin_kemory_kemory__{prefix}_{tool}"
-                with self.subTest(tool=name):
-                    self.assertEqual(self._decision(self.approve(name).stdout),
-                                     "allow")
-
-    def test_approve_never_allows_a_write(self):
-        # This is the assertion that stops a future "simplification" of the
-        # allowlist into a regex over the tool family.
-        for prefix in ("kemory", "s9nmem"):
-            for tool in self.WRITES:
-                name = f"mcp__plugin_kemory_kemory__{prefix}_{tool}"
-                with self.subTest(tool=name):
-                    self.assertIsNone(self._decision(self.approve(name).stdout),
-                                      f"{tool} is a write and must still prompt")
-
-    def test_approve_covers_grok_tool_names(self):
-        # Grok Build names an MCP tool <server>__<tool>, with no mcp__ prefix.
-        self.assertEqual(self._decision(self.approve("kemory__kemory_recall_memory").stdout), "allow")
-        self.assertIsNone(self._decision(self.approve("kemory__kemory_store_memory").stdout),
-                          "a write must still prompt under Grok's names too")
-
-    def test_approve_ignores_non_kemory_tools(self):
-        for name in ("Bash", "Read", "mcp__other__search_memory", "other__search_memory"):
-            with self.subTest(tool=name):
-                self.assertIsNone(self._decision(self.approve(name).stdout))
-
-    def test_approve_silent_on_unparseable_input(self):
-        r = subprocess.run([str(PLUS_SCRIPTS / "recall-approve.sh")], input="not json",
-                           text=True, capture_output=True, env=self.env())
-        self.assertIsNone(self._decision(r.stdout))
-
-    def test_approve_never_denies(self):
-        for name in ("mcp__plugin_kemory_kemory__kemory_store_memory", "Bash"):
-            with self.subTest(tool=name):
-                self.assertNotIn("deny", self.approve(name).stdout)
 
     # --- incremental capture (Stop) ---------------------------------------
     def stop(self, transcript, session="s", **env):
@@ -2840,6 +2758,80 @@ class ConnectorStatusTest(unittest.TestCase):
         self.assertIn("standing down", self.launch().stderr)
         r = self.launch(KEMORY_ALLOW_DUPLICATE="1")
         self.assertNotIn("standing down", r.stderr)
+
+
+class ReleaseScriptTest(unittest.TestCase):
+    """scripts/release.py: changelog fragments folded in at release time."""
+
+    def setUp(self):
+        self.root = pathlib.Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.root)
+        for rel in ("CHANGELOG.md", ".claude-plugin/marketplace.json",
+                    "plugin/.claude-plugin/plugin.json", "plugin/.grok-plugin/plugin.json"):
+            (self.root / rel).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy(ROOT / rel, self.root / rel)
+        (self.root / "changes").mkdir()
+        (self.root / "changes" / "README.md").write_text("# not a fragment\n")
+        self.version = json.loads((ROOT / "plugin/.claude-plugin/plugin.json").read_text())["version"]
+        major, minor, _ = self.version.split(".")
+        self.next = f"{major}.{int(minor) + 1}.0"
+
+    def fragment(self, name, text):
+        (self.root / "changes" / name).write_text(text)
+
+    def run_release(self, *args):
+        return subprocess.run([sys.executable, str(ROOT / "scripts" / "release.py"),
+                               "--root", str(self.root), *args],
+                              text=True, capture_output=True)
+
+    def test_folds_fragments_by_category_and_bumps_every_manifest(self):
+        self.fragment("b.md", "### Fixed\n- **B fixed.** Detail.\n")
+        self.fragment("a.md", "### Changed\n- **A changed.**\n  Wrapped line.\n\n### Fixed\n- **A fixed.**\n")
+        r = self.run_release(self.next, "--date", "2026-10-12")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        changelog = (self.root / "CHANGELOG.md").read_text()
+        self.assertIn(f"## [{self.next}] — 2026-10-12\n\n### Changed\n- **A changed.**\n  Wrapped line.\n\n"
+                      "### Fixed\n- **A fixed.**\n- **B fixed.** Detail.\n\n"
+                      f"## [{self.version}]", changelog)
+        for rel in ("plugin/.claude-plugin/plugin.json", "plugin/.grok-plugin/plugin.json"):
+            self.assertEqual(json.loads((self.root / rel).read_text())["version"], self.next)
+        entries = json.loads((self.root / ".claude-plugin/marketplace.json").read_text())["plugins"]
+        self.assertEqual([e.get("version") for e in entries if e["name"] == "kemory"], [self.next])
+        self.assertEqual(sorted(p.name for p in (self.root / "changes").iterdir()), ["README.md"])
+
+    def test_refuses_without_fragments(self):
+        r = self.run_release(self.next)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("no fragments", r.stderr)
+
+    def test_refuses_a_version_that_is_not_past_the_current_one(self):
+        self.fragment("a.md", "### Fixed\n- x\n")
+        for version in (self.version, "0.0.1", "1.2"):
+            with self.subTest(version=version):
+                self.assertNotEqual(self.run_release(version).returncode, 0)
+        self.assertTrue((self.root / "changes" / "a.md").exists())
+
+    def test_check_rejects_malformed_fragments(self):
+        cases = {"## Fixed\n- x\n": "expected", "### Fixes\n- x\n": "expected",
+                 "- x\n": "before the first", "### Fixed\nno bullet\n": "no '- ' bullet"}
+        for text, why in cases.items():
+            with self.subTest(text=text):
+                self.fragment("bad.md", text)
+                r = self.run_release("--check")
+                self.assertEqual(r.returncode, 1)
+                self.assertIn(why, r.stdout)
+
+    def test_check_rejects_a_hand_written_unreleased_section(self):
+        changelog = self.root / "CHANGELOG.md"
+        changelog.write_text(changelog.read_text().replace("## [", "## [Unreleased]\n\n- x\n\n## [", 1))
+        r = self.run_release("--check")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("[Unreleased]", r.stdout)
+
+    def test_repo_fragments_pass_the_check(self):
+        r = subprocess.run([sys.executable, str(ROOT / "scripts" / "release.py"), "--check"],
+                           text=True, capture_output=True)
+        self.assertEqual(r.returncode, 0, r.stdout)
 
 
 if __name__ == "__main__":
