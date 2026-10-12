@@ -20,6 +20,9 @@ import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / "plugin" / "scripts"
+# kemory-plus: the module and read-only auto-approval, shipped beside kemory.
+PLUS_SCRIPTS = ROOT / "plus" / "scripts"
+PLUS_HOOKS = ROOT / "plus" / "hooks" / "hooks.json"
 
 
 class Recorder(http.server.BaseHTTPRequestHandler):
@@ -642,11 +645,22 @@ class HookTest(unittest.TestCase):
         # UserPromptSubmit / PreToolUse would inject nothing while still
         # appearing to run — the failure is invisible.
         hooks = json.loads((ROOT / "plugin" / "hooks" / "hooks.json").read_text())
-        for event in ("SessionStart", "UserPromptSubmit", "PreToolUse"):
-            for group in hooks["hooks"][event]:
+        plus = json.loads(PLUS_HOOKS.read_text())
+        for source, event in (("kemory", "SessionStart"), ("kemory", "UserPromptSubmit"),
+                              ("kemory-plus", "PreToolUse")):
+            for group in (hooks if source == "kemory" else plus)["hooks"][event]:
                 for hook in group["hooks"]:
-                    with self.subTest(event=event):
+                    with self.subTest(source=source, event=event):
                         self.assertNotEqual(hook.get("async"), True)
+
+    def test_core_plugin_holds_no_approval_hook_or_module(self):
+        # The plugin directory holds back any version whose hooks approve
+        # tool calls or that ships a mod. Both live in kemory-plus so that
+        # kemory itself can reach users.
+        hooks = json.loads((ROOT / "plugin" / "hooks" / "hooks.json").read_text())
+        self.assertNotIn("PreToolUse", hooks["hooks"])
+        self.assertNotIn("modules", hooks)
+        self.assertFalse(list((ROOT / "plugin").rglob("*.tsx")))
 
     def test_capture_is_registered_on_stop_and_session_end(self):
         hooks = json.loads((ROOT / "plugin" / "hooks" / "hooks.json").read_text())
@@ -978,7 +992,9 @@ class HookTest(unittest.TestCase):
         payload = {"session_id": "s", "hook_event_name": "PreToolUse",
                    "tool_name": tool_name, "tool_input": {}}
         payload.update(extra)
-        return self.run_script("recall-approve.sh", payload)
+        return subprocess.run([str(PLUS_SCRIPTS / "recall-approve.sh")],
+                              input=json.dumps(payload), text=True,
+                              capture_output=True, env=self.env())
 
     def _decision(self, stdout):
         try:
@@ -991,7 +1007,9 @@ class HookTest(unittest.TestCase):
                               "pretooluse-kemory-recall.json").read_text())
         self.assertIsInstance(fixture["tool_input"], dict,
                               "fixture must keep the real payload shape")
-        r = self.run_script("recall-approve.sh", fixture)
+        r = subprocess.run([str(PLUS_SCRIPTS / "recall-approve.sh")],
+                           input=json.dumps(fixture), text=True,
+                           capture_output=True, env=self.env())
         self.assertEqual(self._decision(r.stdout), "allow")
         self.assertIn("hybrid search", json.loads(r.stdout)["systemMessage"])
 
@@ -1025,7 +1043,7 @@ class HookTest(unittest.TestCase):
                 self.assertIsNone(self._decision(self.approve(name).stdout))
 
     def test_approve_silent_on_unparseable_input(self):
-        r = subprocess.run([str(SCRIPTS / "recall-approve.sh")], input="not json",
+        r = subprocess.run([str(PLUS_SCRIPTS / "recall-approve.sh")], input="not json",
                            text=True, capture_output=True, env=self.env())
         self.assertIsNone(self._decision(r.stdout))
 

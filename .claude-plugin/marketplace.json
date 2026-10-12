@@ -13,6 +13,12 @@
       "source": "./plugin",
       "description": "Persistent cross-session memory via Kemory: hooks that keep recall quality improving, a skill for using memory well, and session capture, on by default.",
       "version": "0.11.1"
+    },
+    {
+      "name": "kemory-plus",
+      "source": "./plus",
+      "description": "Kemory inside Claude Code: a status line that says whether memory works, the memories in context above the prompt, transcript cards, and a panel to review, rate, save and delete memories. Auto-approves read-only Kemory tools. Requires the kemory plugin.",
+      "version": "0.11.1"
     }
   ]
 }

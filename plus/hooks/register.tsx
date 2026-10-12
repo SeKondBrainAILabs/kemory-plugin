@@ -225,7 +225,7 @@ async function versionOnDisk($: Engine): Promise<string | undefined> {
   try {
     const home = await $.env.get('HOME')
     const plugins = JSON.parse(await $.fs.read(`${home}/.claude/plugins/installed_plugins.json`)).plugins ?? {}
-    const key = Object.keys(plugins).find(k => k.startsWith('kemory@'))
+    const key = Object.keys(plugins).find(k => k.startsWith('kemory-plus@'))
     const installs = key ? plugins[key] : undefined
 
     return Array.isArray(installs) ? installs[0]?.version : undefined
@@ -240,8 +240,8 @@ async function updateHint($: Engine): Promise<string> {
   const surfaces = await $.session.surfaces()
 
   return surfaces.includes('terminal')
-    ? 'Run /plugin update kemory@kemory, then restart.'
-    : "Run 'claude plugin update kemory@kemory' in a terminal, then open a new session."
+    ? 'Run /plugin update kemory@kemory and /plugin update kemory-plus@kemory, then restart.'
+    : "Run 'claude plugin update kemory@kemory' and 'claude plugin update kemory-plus@kemory' in a terminal, then open a new session."
 }
 
 async function check($: Engine) {
@@ -395,7 +395,7 @@ async function suggest($: Engine, isAsked: boolean) {
   ]
   if (fresh.length > 0) {
     const noun = fresh.length === 1 ? 'memory' : 'memories'
-    $.ui.toast(`Kemory: ${fresh.length} suggested ${noun}, see /kemory:memories`, { timeoutMs: 8000 })
+    $.ui.toast(`Kemory: ${fresh.length} suggested ${noun}, see /kemory-plus:memories`, { timeoutMs: 8000 })
   } else if (isAsked) {
     $.ui.toast('Kemory: nothing new worth saving')
   }
@@ -561,20 +561,20 @@ export const register: Register = on => {
   // The plugin's own commands (commands/*.md), answered here where the module
   // runs; elsewhere their files run as prompts. Shipping them as files is what
   // lists them in the command picker, which runtime-registered commands miss.
-  on('command.run', { command: 'kemory:memories' }, async $ => {
+  on('command.run', { command: 'kemory-plus:memories' }, async $ => {
     await $.ui.open({ id: PANE, title: 'Kemory' })
 
     return { text: 'Kemory panel opened.' }
   }).catch(($, e, next) => next(e))
 
-  on('command.run', { command: 'kemory:remember' }, async ($, e) => {
+  on('command.run', { command: 'kemory-plus:remember' }, async ($, e) => {
     const text = e.args.trim() || (await lastReply($))
     if (!text) return { text: 'Nothing to save: no text given and no reply yet.' }
 
     return { text: (await save($, text)) ? `Saved to ${NAMESPACE}: ${titleOf(text)}` : 'Save failed.' }
   }).catch(($, e, next) => next(e))
 
-  on('command.run', { command: 'kemory:learned' }, async $ => {
+  on('command.run', { command: 'kemory-plus:learned' }, async $ => {
     await $.ui.open({ id: PANE, title: 'Kemory' })
     await suggest($, true)
 

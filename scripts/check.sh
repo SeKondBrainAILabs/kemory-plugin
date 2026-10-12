@@ -47,6 +47,11 @@ if command -v claude >/dev/null 2>&1; then
   else
     echo "  FAIL plugin manifest"; fail=1
   fi
+  if claude plugin validate ./plus >/dev/null 2>&1; then
+    echo "  ok   kemory-plus manifest"
+  else
+    echo "  FAIL kemory-plus manifest"; fail=1
+  fi
 else
   echo "→ official manifest validation (skipped: claude CLI not on PATH)"
 fi
@@ -82,6 +87,27 @@ fi
 # all, and it is a static file no test exercises. Assert its shape here: a
 # wrong host, a dropped credential header or a changed transport all ship
 # silently otherwise, and the symptom reaches the user, not CI.
+# kemory-plus ships beside kemory in the same marketplace and the same release,
+# so it carries the same version, in both of its manifests and its entry.
+echo "→ kemory-plus agrees with kemory"
+xver=$(jq -r '.version' plus/.claude-plugin/plugin.json)
+xmver=$(jq -r '.plugins[] | select(.name=="kemory-plus") | .version' .claude-plugin/marketplace.json)
+if [ "$xver" != "$pver" ] || [ "$xmver" != "$pver" ]; then
+  echo "  FAIL kemory-plus $xver (marketplace $xmver) != kemory $pver"; fail=1
+elif ! diff -q plus/.claude-plugin/plugin.json plus/.grok-plugin/plugin.json >/dev/null; then
+  echo "  FAIL kemory-plus manifests have diverged"; fail=1
+else
+  echo "  ok   $xver"
+fi
+# The status check in kemory-plus sources its own copy of lib.sh, since an
+# installed plugin cannot reach a sibling's files. A drifted copy would check
+# a different credential than the hooks use.
+if diff -q plugin/scripts/lib.sh plus/scripts/lib.sh >/dev/null; then
+  echo "  ok   plus/scripts/lib.sh matches plugin/scripts/lib.sh"
+else
+  echo "  FAIL plus/scripts/lib.sh differs from plugin/scripts/lib.sh — copy it over"; fail=1
+fi
+
 echo "→ manifests agree on content"
 if diff -q plugin/.claude-plugin/plugin.json plugin/.grok-plugin/plugin.json >/dev/null; then
   echo "  ok   .claude-plugin and .grok-plugin are identical"
@@ -114,6 +140,11 @@ while IFS= read -r s; do
   if [ -f "$s" ]; then echo "  ok   $s"; else echo "  FAIL missing $s"; fail=1; fi
 done < <(jq -r '.hooks[][].hooks[].command | select(contains("CLAUDE_PLUGIN_ROOT"))' \
           plugin/hooks/hooks.json | awk '{print $1}')
+while IFS= read -r s; do
+  s="${s/\$\{CLAUDE_PLUGIN_ROOT\}/plus}"
+  if [ -f "$s" ]; then echo "  ok   $s"; else echo "  FAIL missing $s"; fail=1; fi
+done < <(jq -r '.hooks[][].hooks[].command | select(contains("CLAUDE_PLUGIN_ROOT"))' \
+          plus/hooks/hooks.json | awk '{print $1}')
 
 echo "→ hook behaviour tests"
 if python3 test/test_hooks.py >/tmp/kemory-tests.log 2>&1; then
