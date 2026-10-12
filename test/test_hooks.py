@@ -122,6 +122,20 @@ class McpRecorder(http.server.BaseHTTPRequestHandler):
         pass
 
 
+def reset_recorder():
+    """Recorder's fields are class attributes shared by every class using it."""
+    Recorder.posts.clear()
+    Recorder.get_payload = {"namespaces": []}
+    Recorder.search_payload = {"items": [], "total": 0}
+    Recorder.search_status = 200
+    Recorder.memories_status = 201
+    Recorder.get_status = 200
+    Recorder.agents_payload = None
+    Recorder.token_payload = {"access_token": "fresh-token",
+                              "expires_in": 3600}
+    Recorder.token_status = 200
+
+
 class HookTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -134,16 +148,7 @@ class HookTest(unittest.TestCase):
         cls.srv.shutdown()
 
     def setUp(self):
-        Recorder.posts.clear()
-        Recorder.get_payload = {"namespaces": []}
-        Recorder.search_payload = {"items": [], "total": 0}
-        Recorder.search_status = 200
-        Recorder.memories_status = 201
-        Recorder.get_status = 200
-        Recorder.agents_payload = None
-        Recorder.token_payload = {"access_token": "fresh-token",
-                                  "expires_in": 3600}
-        Recorder.token_status = 200
+        reset_recorder()
         self.home = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.home, ignore_errors=True)
 
@@ -1178,15 +1183,26 @@ class HookTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(r.stdout.splitlines()[:2], [self.CURRENT_URL, self.RETIRED_URL])
 
+    def failing_curl(self):
+        d = pathlib.Path(self.home) / "curlbin"
+        d.mkdir(exist_ok=True)
+        f = d / "curl"
+        f.write_text("#!/bin/sh\nexit 7\n")
+        f.chmod(0o755)
+        return f"{d}:{os.environ.get('PATH', '')}"
+
     def test_status_remedy_matches_where_the_host_came_from(self):
         """Never tell someone with no CLI to re-run a CLI command."""
+        # lib.sh rewrites the retired host to the hardcoded production host, so
+        # no local server can stand in; curl fails at once instead.
+        path = self.failing_curl()
         r = self.run_script("status.sh", {}, KEMORY_API_KEY="k",
-                            KEMORY_URL=self.RETIRED_URL)
+                            KEMORY_URL=self.RETIRED_URL, PATH=path)
         self.assertIn("KEMORY_URL is set", r.stdout)
         self.assertNotIn("kemory login", r.stdout)
 
         self.write_credentials(self.RETIRED_URL)
-        e = self.env(); e.pop("KEMORY_URL", None)
+        e = self.env(PATH=path); e.pop("KEMORY_URL", None)
         r = subprocess.run([str(SCRIPTS / "status.sh")], input="{}", text=True,
                            capture_output=True, env=e)
         self.assertIn("kemory login", r.stdout)
@@ -2224,10 +2240,21 @@ class DuplicateServerTest(unittest.TestCase):
     only looks similar.
     """
 
+    @classmethod
+    def setUpClass(cls):
+        cls.srv = http.server.HTTPServer(("127.0.0.1", 0), Recorder)
+        cls.port = cls.srv.server_address[1]
+        threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.srv.shutdown()
+
     def setUp(self):
+        reset_recorder()
         self.home = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.home, ignore_errors=True)
-        self.mine = "https://api.kemory.s9n.ai"
+        self.mine = f"http://127.0.0.1:{self.port}"
 
     def env(self, **extra):
         e = {k: v for k, v in os.environ.items() if not k.startswith("KEMORY_")}
@@ -2302,9 +2329,12 @@ class DuplicateServerTest(unittest.TestCase):
         self.assertStoodDown(self.launch(), "kemory")
 
     def test_yields_to_an_entry_that_is_not_called_kemory(self):
-        # A hand-written entry is often named something else.
+        # A hand-written entry is often named something else. find_duplicate
+        # only looks at entries that mention "kemory" somewhere; on the
+        # production host the URL did, on a local port the header has to.
         self.write_config({"memory": {"type": "http",
-                                      "url": f"{self.mine}/mcp/v1"}})
+                                      "url": f"{self.mine}/mcp/v1",
+                                      "headers": {"X-Client": "kemory"}}})
         self.assertStoodDown(self.launch(), "memory")
 
     def test_yields_to_this_projects_entry(self):
@@ -2486,10 +2516,21 @@ class SkippedServerTest(unittest.TestCase):
     test that asserts we speak up has a twin asserting we stay quiet.
     """
 
+    @classmethod
+    def setUpClass(cls):
+        cls.srv = http.server.HTTPServer(("127.0.0.1", 0), Recorder)
+        cls.port = cls.srv.server_address[1]
+        threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.srv.shutdown()
+
     def setUp(self):
+        reset_recorder()
         self.home = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.home, ignore_errors=True)
-        self.mine = "https://api.kemory.s9n.ai"
+        self.mine = f"http://127.0.0.1:{self.port}"
         self.cache = pathlib.Path(self.home) / ".claude" / "mcp-needs-auth-cache.json"
         self.cache.parent.mkdir(parents=True, exist_ok=True)
 
