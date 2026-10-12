@@ -20,9 +20,6 @@ import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / "plugin" / "scripts"
-# kemory-plus: the module and read-only auto-approval, shipped beside kemory.
-PLUS_SCRIPTS = ROOT / "plus" / "scripts"
-PLUS_HOOKS = ROOT / "plus" / "hooks" / "hooks.json"
 
 
 class Recorder(http.server.BaseHTTPRequestHandler):
@@ -642,21 +639,19 @@ class HookTest(unittest.TestCase):
 
     def test_injection_hooks_are_synchronous(self):
         # An async hook's stdout is discarded, so an async SessionStart /
-        # UserPromptSubmit / PreToolUse would inject nothing while still
-        # appearing to run — the failure is invisible.
+        # UserPromptSubmit would inject nothing while still appearing to run —
+        # the failure is invisible.
         hooks = json.loads((ROOT / "plugin" / "hooks" / "hooks.json").read_text())
-        plus = json.loads(PLUS_HOOKS.read_text())
-        for source, event in (("kemory", "SessionStart"), ("kemory", "UserPromptSubmit"),
-                              ("kemory-plus", "PreToolUse")):
-            for group in (hooks if source == "kemory" else plus)["hooks"][event]:
+        for event in ("SessionStart", "UserPromptSubmit"):
+            for group in hooks["hooks"][event]:
                 for hook in group["hooks"]:
-                    with self.subTest(source=source, event=event):
+                    with self.subTest(event=event):
                         self.assertNotEqual(hook.get("async"), True)
 
     def test_core_plugin_holds_no_approval_hook_or_module(self):
         # The plugin directory holds back any version whose hooks approve
-        # tool calls or that ships a mod. Both live in kemory-plus so that
-        # kemory itself can reach users.
+        # tool calls or that ships a mod. Both live in kemory-plus, a separate
+        # repository, so that kemory itself can reach users.
         hooks = json.loads((ROOT / "plugin" / "hooks" / "hooks.json").read_text())
         self.assertNotIn("PreToolUse", hooks["hooks"])
         self.assertNotIn("modules", hooks)
@@ -973,84 +968,6 @@ class HookTest(unittest.TestCase):
         r = self.run_script("prompt-recall.sh",
                             {"session_id": "s", "prompt": self.PROMPT})
         self.assertEqual(r.stdout.strip(), "")
-
-    # --- read-only auto-approval (PreToolUse) -----------------------------
-    READ_ONLY = ("recall", "recall_memory", "get_context", "ask",
-                 "find_similar", "get_compressed", "get_raw",
-                 "get_session_context", "get_namespace_summary", "get_profile",
-                 "get_user_context", "get_history", "list_namespaces",
-                 "list_projects", "list_skills", "whoami", "check_access",
-                 "rehydrate_session_sources")
-    # kemory_memory is "Save one memory. Friendly alias of kemory_store_memory"
-    # — it requires memory:write despite reading like a read. rate_memory is a
-    # write whose rows move an org-level indicator.
-    WRITES = ("memory", "store_memory", "store_skill", "capture_session",
-              "consolidate_session", "delete_memory", "forget",
-              "promote_memory", "resolve_conflict", "rate_memory")
-
-    def approve(self, tool_name, **extra):
-        payload = {"session_id": "s", "hook_event_name": "PreToolUse",
-                   "tool_name": tool_name, "tool_input": {}}
-        payload.update(extra)
-        return subprocess.run([str(PLUS_SCRIPTS / "recall-approve.sh")],
-                              input=json.dumps(payload), text=True,
-                              capture_output=True, env=self.env())
-
-    def _decision(self, stdout):
-        try:
-            return json.loads(stdout)["hookSpecificOutput"]["permissionDecision"]
-        except Exception:
-            return None
-
-    def test_approve_matches_real_payload(self):
-        fixture = json.loads((ROOT / "test" / "fixtures" /
-                              "pretooluse-kemory-recall.json").read_text())
-        self.assertIsInstance(fixture["tool_input"], dict,
-                              "fixture must keep the real payload shape")
-        r = subprocess.run([str(PLUS_SCRIPTS / "recall-approve.sh")],
-                           input=json.dumps(fixture), text=True,
-                           capture_output=True, env=self.env())
-        self.assertEqual(self._decision(r.stdout), "allow")
-        self.assertIn("hybrid search", json.loads(r.stdout)["systemMessage"])
-
-    def test_approve_allows_every_read_only_tool(self):
-        for prefix in ("kemory", "s9nmem"):
-            for tool in self.READ_ONLY:
-                name = f"mcp__plugin_kemory_kemory__{prefix}_{tool}"
-                with self.subTest(tool=name):
-                    self.assertEqual(self._decision(self.approve(name).stdout),
-                                     "allow")
-
-    def test_approve_never_allows_a_write(self):
-        # This is the assertion that stops a future "simplification" of the
-        # allowlist into a regex over the tool family.
-        for prefix in ("kemory", "s9nmem"):
-            for tool in self.WRITES:
-                name = f"mcp__plugin_kemory_kemory__{prefix}_{tool}"
-                with self.subTest(tool=name):
-                    self.assertIsNone(self._decision(self.approve(name).stdout),
-                                      f"{tool} is a write and must still prompt")
-
-    def test_approve_covers_grok_tool_names(self):
-        # Grok Build names an MCP tool <server>__<tool>, with no mcp__ prefix.
-        self.assertEqual(self._decision(self.approve("kemory__kemory_recall_memory").stdout), "allow")
-        self.assertIsNone(self._decision(self.approve("kemory__kemory_store_memory").stdout),
-                          "a write must still prompt under Grok's names too")
-
-    def test_approve_ignores_non_kemory_tools(self):
-        for name in ("Bash", "Read", "mcp__other__search_memory", "other__search_memory"):
-            with self.subTest(tool=name):
-                self.assertIsNone(self._decision(self.approve(name).stdout))
-
-    def test_approve_silent_on_unparseable_input(self):
-        r = subprocess.run([str(PLUS_SCRIPTS / "recall-approve.sh")], input="not json",
-                           text=True, capture_output=True, env=self.env())
-        self.assertIsNone(self._decision(r.stdout))
-
-    def test_approve_never_denies(self):
-        for name in ("mcp__plugin_kemory_kemory__kemory_store_memory", "Bash"):
-            with self.subTest(tool=name):
-                self.assertNotIn("deny", self.approve(name).stdout)
 
     # --- incremental capture (Stop) ---------------------------------------
     def stop(self, transcript, session="s", **env):
