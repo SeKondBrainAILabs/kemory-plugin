@@ -13,7 +13,8 @@ Hooks and a skill that make Claude Code use Kemory memory well.
 | `capture.sh` | `Stop`, `SessionEnd` | **On by default** (`KEMORY_AUTO_CAPTURE=0` opts out). Stores new turns as redacted episodic memories as the session goes, so a killed session still leaves its work behind |
 
 Read-only auto-approval, the status line and the in-app panel are in the
-separate `kemory-plus` plugin (see `plus/README.md`).
+separate `kemory-plus` plugin,
+[SeKondBrainAILabs/kemory-plus](https://github.com/SeKondBrainAILabs/kemory-plus).
 
 Plus:
 
@@ -184,8 +185,7 @@ anything at all: **prompt recall**, which sends the text of your prompt as a
 search query, and **session capture**, which sends a redacted digest of your
 own turns. Both are on by default, and both are switched off with
 `KEMORY_PROMPT_RECALL=0` and `KEMORY_AUTO_CAPTURE=0`. Context injection sends
-only your credential; the recall-approval and rate-reminder hooks make no
-network calls at all.
+only your credential; the rate-reminder hook makes no network calls at all.
 
 Stored content lives in your own vault, scoped to your organisation and user,
 and persists until you delete it — note that the `kemory_delete_memory` and
