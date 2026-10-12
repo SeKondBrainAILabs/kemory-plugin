@@ -229,7 +229,7 @@ def main() -> None:
             claims = claims_of(body["access_token"])
             who = claims.get("email") or claims.get("preferred_username") or "signed in"
             print(f"\nSigned in as {who}. Credential written to {path}.")
-            print("Restart Claude Code to pick it up — the hooks and the memory tools both read this file.")
+            print("Restart your session to pick it up — the hooks and the memory tools both read this file.")
             return
         error = body.get("error")
         if error == "authorization_pending":

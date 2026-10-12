@@ -1,6 +1,6 @@
 # Kemory plugin
 
-Hooks and a skill that make Claude Code use Kemory memory well.
+Hooks and a skill that make your coding agent use Kemory memory well.
 
 ## What it does
 
