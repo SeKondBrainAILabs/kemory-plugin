@@ -1220,7 +1220,7 @@ class HookTest(unittest.TestCase):
         Recorder.agents_payload = [self.agent(slug="claude-web")]
         r = self.run_script("status.sh", {}, KEMORY_TOKEN="t")
         self.assertIn("never seen the memory tools connect", r.stdout)
-        self.assertIn("/mcp", r.stdout)
+        self.assertIn("MCP server list", r.stdout)
 
     def fake_cli(self, version):
         d = pathlib.Path(self.home) / "bin"
@@ -1241,7 +1241,7 @@ class HookTest(unittest.TestCase):
         Recorder.agents_payload = []
         r = self.run_script("status.sh", {}, KEMORY_TOKEN="t", PATH=self.fake_cli("0.6.10"))
         self.assertNotIn("kemory upgrade", r.stdout)
-        self.assertIn("/mcp", r.stdout)
+        self.assertIn("MCP server list", r.stdout)
 
     def test_status_confirms_tools_that_connected(self):
         Recorder.agents_payload = [self.agent(days_ago=0)]
@@ -1257,7 +1257,7 @@ class HookTest(unittest.TestCase):
     def test_status_flags_tools_that_stopped_connecting(self):
         Recorder.agents_payload = [self.agent(days_ago=12)]
         r = self.run_script("status.sh", {}, KEMORY_TOKEN="t")
-        self.assertIn("last connected from Claude Code 12 days ago", r.stdout)
+        self.assertIn("last connected from this host 12 days ago", r.stdout)
 
     def test_status_does_not_guess_when_the_server_cannot_say(self):
         # The namespaces payload is not an agent list: say nothing either way.
@@ -2757,8 +2757,15 @@ class ConnectorStatusTest(unittest.TestCase):
         self.config.chmod(0o000)
         self.assertCouldNotTell(self.status())
 
-    def test_status_does_not_guess_on_a_missing_file(self):
-        self.assertCouldNotTell(self.status())
+    def test_status_is_silent_about_the_connector_on_a_missing_file(self):
+        # No ~/.claude.json means no Claude on this machine. Reporting that we
+        # could not read it is noise about a product the user is not running.
+        r = self.status()
+        self.assertEqual(r.returncode, 0)
+        self.assertNotIn("could not tell", r.stdout)
+        self.assertNotIn("~/.claude.json", r.stdout)
+        self.assertNotIn("has connected", r.stdout)
+        self.assertNotIn("no claude.ai Kemory connector", r.stdout)
 
     def test_status_no_longer_says_it_cannot_see_the_connector(self):
         for blob in self.fixtures():

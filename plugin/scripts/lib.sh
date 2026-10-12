@@ -34,7 +34,12 @@ KEMORY_DEFAULT_CAPTURE_NAMESPACE="user:sessions"
 # How to update the plugin, said so the person can act on it where they are.
 # `/plugin` is a terminal dialog; the desktop app (CLAUDE_CODE_ENTRYPOINT is
 # claude-desktop there) has no such command, so it gets the CLI form.
+# Grok Build has neither: it installs under ~/.grok and updates from its own
+# CLI, so naming a Claude command there is advice the person cannot run.
 kemory_update_command() {
+  case "${CLAUDE_PLUGIN_ROOT:-}" in
+    */.grok/*) printf '%s' "'grok plugin update kemory' in a terminal"; return ;;
+  esac
   if [ "${CLAUDE_CODE_ENTRYPOINT:-}" = "claude-desktop" ]; then
     printf '%s' "'claude plugin update kemory@kemory' in a terminal"
   else

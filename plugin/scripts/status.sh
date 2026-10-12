@@ -118,7 +118,7 @@ if [ -n "$skipped" ]; then
     # is how someone reads past the line that matters.
     verb="would start"
     serves="info"
-    bad "Claude Code is SKIPPING this server — it cached a connect failure"
+    bad "the host is SKIPPING this server — it cached a connect failure"
     info "'$skipped_key' failed at $when; the host retries by itself at $until_when"
     info "that cache is global, so the tools are off for EVERY session started in"
     info "that window — including this one, whose own launch may be fine"
@@ -221,8 +221,8 @@ else:
 ' 2>/dev/null)"
   case "$seen" in
     never)
-      bad "the Kemory server has never seen the memory tools connect from Claude Code"
-      info "so the kemory_* tools are missing and the dashboard shows Claude Code as"
+      bad "the Kemory server has never seen the memory tools connect from this host"
+      info "so the kemory_* tools are missing and the dashboard shows this host as"
       info "not connected, even though the hooks work."
       # Before 0.6.8 the CLI's bridge answered `initialize` itself and never
       # sent it upstream, so its tools worked and nothing ever registered.
@@ -230,19 +230,19 @@ else:
       if [ -n "$cli_version" ] && [ "$(printf '%s\n0.6.8\n' "$cli_version" | sort -t. -k1,1n -k2,2n -k3,3n | head -1)" != "0.6.8" ]; then
         info "kemory CLI $cli_version serves the tools, and versions before 0.6.8"
         info "never register with the server: run 'kemory upgrade', then restart"
-        info "Claude Code fully"
+        info "the host fully"
       else
-        info "Run /mcp: if kemory is failed or missing, restart Claude Code fully;"
-        info "if it names another entry, that entry is the one to fix"
+        info "Check the host's MCP server list: if kemory is failed or missing,"
+        info "restart the host fully; if it names another entry, fix that one"
       fi ;;
     ''|unknown)
       info "could not ask the Kemory server whether the memory tools have connected" ;;
     *)
       if [ "$seen" -le 7 ] 2>/dev/null; then
-        ok "the Kemory server has seen the memory tools connect from Claude Code"
+        ok "the Kemory server has seen the memory tools connect from this host"
       else
-        bad "the memory tools last connected from Claude Code $seen days ago"
-        info "run /mcp: if kemory is failed or missing, restart Claude Code fully"
+        bad "the memory tools last connected from this host $seen days ago"
+        info "check the host's MCP server list: if kemory is failed or missing, restart it"
       fi ;;
   esac
 fi
@@ -257,6 +257,10 @@ if [ "${others:-0}" -gt 0 ] && [ -z "$duplicate" ]; then
   info "$others other kemory MCP $noun on this machine, pointing elsewhere"
   info "if one of them is meant to be this Kemory, keep a single server"
 fi
+# The claude.ai connector is a Claude-only concept, read from ~/.claude.json.
+# Under another host that file does not exist, and reporting that we could not
+# read it is noise about a product the user may not be running.
+if [ -f "$HOME/.claude.json" ]; then
 connector=$(kemory_connector_ever_connected)
 case "$connector" in
   seen*)
@@ -267,9 +271,10 @@ case "$connector" in
     info "no claude.ai Kemory connector has connected to Claude Code on this machine" ;;
   *)
     info "could not tell from ~/.claude.json whether a claude.ai Kemory connector"
-    info "is in use — the file is missing, unreadable or not in the expected shape" ;;
+    info "is in use — the file is unreadable or not in the expected shape" ;;
 esac
-info "run /mcp to confirm which kemory server Claude is actually talking to"
+fi
+info "the host's own MCP server list shows which kemory server it is using"
 
 # --- plugin version --------------------------------------------------------
 manifest="$DIR/../.claude-plugin/plugin.json"
