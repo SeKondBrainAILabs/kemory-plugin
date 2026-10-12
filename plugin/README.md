@@ -152,10 +152,11 @@ export KEMORY_AUTO_CAPTURE=0
 | `KEMORY_API_KEY` | — | API key from kemory.sekondbrain.ai, sent as `X-API-Key` |
 
 All hooks that reach the API share one credential resolver
-(`scripts/lib.sh`): the CLI's `~/.kemory/credentials` if present, otherwise
-`KEMORY_API_KEY` or `KEMORY_TOKEN`, against `KEMORY_URL` (defaulting to
-hosted Kemory). `kemory login` is the recommended route — OAuth browser
-sign-in, nothing to paste, and it writes the credentials the hooks read. The
+(`scripts/lib.sh`): `KEMORY_API_KEY`, then `KEMORY_TOKEN`, then
+`~/.kemory/credentials-${KEMORY_ENV:-prod}`, then `~/.kemory/credentials`,
+against `KEMORY_URL` (defaulting to hosted Kemory). `/kemory:login` or
+`kemory login` is the recommended route — OAuth sign-in, nothing to paste, and
+it writes the file the hooks read. The
 API accepts either credential style. With none of those, every hook stays
 silent.
 

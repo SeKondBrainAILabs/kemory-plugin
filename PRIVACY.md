@@ -6,9 +6,24 @@ its [sub-processor list](https://docs.sekondbrain.ai/subprocessors/). This
 document covers the part that policy cannot: what *this plugin* transmits from
 your machine, and when.
 
-The plugin is a client. It sends data to one place — the Kemory instance you
-point it at, hosted or your own via `KEMORY_URL`. It adds no telemetry, no
-analytics and no third-party endpoint of its own.
+The plugin is a client. It sends data to the Kemory instance you point it at,
+hosted or your own via `KEMORY_URL`, and, for sign-in and token refresh only,
+to the identity provider that instance names. It sends no telemetry and no
+analytics. Its update notice reads the marketplace copy already on your disk
+and does not contact the network. These are all of its calls:
+
+- **Hooks.** The `SessionStart`, `UserPromptSubmit` and `Stop`/`SessionEnd`
+  hooks call your Kemory instance, as the table below shows.
+- **Memory tools.** The bundled MCP server sends the arguments of every Kemory
+  memory tool Claude calls to the same instance, for example the text of a
+  memory being stored or a recall query.
+- **`/kemory:status`.** Sends a health check and an authenticated request to
+  the same instance.
+- **`/kemory:login`.** Asks the instance's
+  `/.well-known/oauth-authorization-server` which identity provider it uses,
+  then runs the device sign-in and token requests against that provider.
+- **Token refresh.** When a stored OAuth token has expired, the hooks send the
+  refresh token to the identity provider named in the credential file.
 
 ## What each hook sends
 
@@ -27,9 +42,18 @@ reads the latest version numbers from GitHub to tell you about updates, and
 runs "Suggest memories" as a model call in your own Claude Code session.
 
 Prompt recall skips prompts under 12 characters and any prompt starting with
-`/`, `!` or `#`, so slash commands are never sent. Separately, when a stored
-OAuth token has expired the hooks refresh it against the identity provider
-named in the CLI's own credential file.
+`/`, `!` or `#`, so slash commands are never sent.
+
+## kemory-plus
+
+`kemory-plus` is a separate, optional plugin from its own repository,
+<https://github.com/SeKondBrainAILabs/kemory-plus>. This document does not
+cover it, and it makes calls of its own. Among them, at session start and
+every 10 minutes it sends a GET, with no credential and no conversation
+content, to
+`https://raw.githubusercontent.com/SeKondBrainAILabs/kemory-plugin/main/plugin/.claude-plugin/plugin.json`
+to read the latest version number, so GitHub sees your IP address. The kemory
+plugin alone makes no such call.
 
 ## Turning transmission off
 
@@ -79,11 +103,24 @@ type there.
 
 ## Local files
 
-`~/.kemory/.captured/` and `~/.kemory/.nudged/` hold per-session hashes used to
-avoid storing or asking twice; `~/.kemory/.setup-hint` and
-`~/.kemory/.paste-hint` hold timestamps that throttle one-off notices. None
-contains conversation content. The plugin never writes credentials anywhere and
-never logs them.
+None of these holds conversation content, except that the credential files
+hold your sign-in tokens.
+
+- `~/.kemory/.captured/` and `~/.kemory/.nudged/` hold per-session hashes, used
+  to avoid storing or asking twice.
+- `~/.kemory/.recalled/` holds, per session, 16-character fingerprints of the
+  memories already injected, so the same memory is not injected twice.
+- `~/.kemory/.setup-hint`, `~/.kemory/.paste-hint` and `~/.kemory/.version-hint`
+  are empty files. Their modification time throttles a one-off notice.
+- `~/.kemory/.capture-default` is an empty marker, so the capture notice is
+  shown once.
+- `~/.kemory/credentials-<env>` and `~/.kemory/credentials` are the credential
+  files. `/kemory:login` writes `~/.kemory/credentials-<env>`. The hooks read
+  one of the two, and rewrite the file they read when they refresh an expired
+  OAuth token. The file holds an access token and a refresh token. It is
+  replaced atomically with mode 0600. It is never logged, and never sent
+  anywhere except in the refresh request to the identity provider named in the
+  file.
 
 At session start the plugin also **reads** `~/.claude/CLAUDE.md` and a
 `CLAUDE.md` in the current directory, looking only for a hand-pasted copy of
