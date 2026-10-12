@@ -12,12 +12,12 @@ Layers, from the host inward:
 1. **Host wiring** (data, no logic): `plugin/hooks/hooks.json`, `plugin/.mcp.json`,
    `plugin/commands/*.md`, `plugin/skills/*`. The host reads these and runs the scripts.
 2. **Hook scripts**: `session-start.sh`, `prompt-recall.sh`, `rate-reminder.sh`,
-   `capture.sh`, `store-nudge.sh` in `plugin/scripts/`. One hook event each.
+   `capture.sh`, `store-nudge.sh` in `plugin/scripts/`. `capture.sh` serves both Stop and SessionEnd.
 3. **Shared code**: `plugin/scripts/lib.sh` (bash, sourced; credential resolution via
    `kemory_resolve_auth`) and `plugin/scripts/redact.py` (imported by `capture.sh` and
    `prompt-recall.sh`). `redact.py` is one copy on purpose, so both paths redact alike.
 4. **Entry scripts**: `mcp.sh` runs `kemory mcp serve` or `mcp_bridge.py`
-   (`mcp.sh:58-75`); `login.sh` runs `login.py`; `status.sh` is behind `/status`.
+   (`mcp.sh:58-75`); `login.sh` runs `login.py`; `status.sh` is behind `/kemory:status`.
 5. **Dev tooling (not shipped)**: `scripts/check.sh`, `scripts/check_mcp_entry.py`,
    `scripts/release.py`.
 6. **Tests**: `test/test_hooks.py` and `test/fixtures/`.
