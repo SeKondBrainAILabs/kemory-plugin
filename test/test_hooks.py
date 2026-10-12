@@ -1198,6 +1198,14 @@ class HookTest(unittest.TestCase):
         self.assertIn("HTTP 200", r.stdout)
         self.assertNotIn("not the API", r.stdout)
 
+    def test_status_names_the_namespace_capture_writes_to(self):
+        r = self.run_script("status.sh", {}, KEMORY_API_KEY="k")
+        self.assertIn("namespace: user:sessions", r.stdout)
+        self.assertNotIn("namespace: shared", r.stdout)
+        r = self.run_script("status.sh", {}, KEMORY_API_KEY="k",
+                            KEMORY_CAPTURE_NAMESPACE="team:x")
+        self.assertIn("namespace: team:x", r.stdout)
+
     # --- did the memory tools actually connect -------------------
     # A valid sign-in makes the hooks work whether or not the MCP server ever
     # reached Kemory, so only the server's own agent row can answer this.

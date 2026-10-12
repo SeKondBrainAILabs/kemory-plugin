@@ -150,6 +150,9 @@ export KEMORY_AUTO_CAPTURE=0
 | `KEMORY_URL` | `https://api.kemory.s9n.ai` | Override only for a self-hosted or community instance |
 | `KEMORY_TOKEN` | — | Bearer token, sent as `Authorization: Bearer` |
 | `KEMORY_API_KEY` | — | API key from kemory.sekondbrain.ai, sent as `X-API-Key` |
+| `KEMORY_ALLOW_DUPLICATE` | `0` | Set to `1` to keep the bundled MCP server running when another configured server already serves the same Kemory |
+| `KEMORY_MCP_TIMEOUT` | `120` | Seconds the bundled MCP bridge waits for the API |
+| `KEMORY_CLIENT_ID` | `kemory-cli` | OAuth client id `/kemory:login` signs in with |
 
 All hooks that reach the API share one credential resolver
 (`scripts/lib.sh`): `KEMORY_API_KEY`, then `KEMORY_TOKEN`, then
