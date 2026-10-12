@@ -30,7 +30,7 @@ Dependency rules:
 - Nothing imports from `test/`. Tests run the shipped scripts as subprocesses and do not
   import them.
 
-The status line, panel and read-only auto-approval live in the separate kemory-plus
+The status line, panel and read-only auto-approval live in the separate kemory-panel
 plugin, not here (`plugin/hooks/hooks.json` description). Do not add them here.
 
 ## Traps
