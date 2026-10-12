@@ -23,6 +23,12 @@ import unittest
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / "plugin" / "scripts"
 
+# Copied verbatim from the INJECTED constant in hooks/register.tsx of the
+# kemory-plus repo, which parses prompt-recall.sh's output to build its memory
+# band. Update it together with that constant.
+PLUS_INJECTED = re.compile(
+    r"^- (?:\[([^\]\n]+)\] )?(.+)\n {2}\(memory_id: ([0-9a-f-]{36})\)$", re.M)
+
 
 class Recorder(http.server.BaseHTTPRequestHandler):
     posts: list = []
@@ -869,6 +875,33 @@ class HookTest(unittest.TestCase):
         self.assertIn("hybrid beat fts", ctx)
         self.assertIn("mem-1", ctx, "the agent can only rate by memory_id")
         self.assertIn("recalled 1 memory", out["systemMessage"])
+
+    def _plus_matches(self):
+        ctx = json.loads(self.recall().stdout)["hookSpecificOutput"]["additionalContext"]
+        # register.tsx sets `namespace = ''` when the group is absent.
+        return [(m.group(1) or "", m.group(2), m.group(3))
+                for m in PLUS_INJECTED.finditer(ctx)]
+
+    def test_prompt_recall_lines_parse_with_the_plus_band_regex(self):
+        first = "11111111-2222-3333-4444-555555555555"
+        second = "66666666-7777-8888-9999-000000000000"
+        Recorder.search_payload = {"items": [
+            {"memory_id": first, "namespace": "shared",
+             "content": "use [hybrid] search\nnot   fts"},
+            {"memory_id": second, "namespace": "", "content": "second fact"},
+        ], "total": 2}
+        self.assertEqual(self._plus_matches(), [
+            ("shared", "use [hybrid] search not fts", first),
+            ("", "second fact", second),
+        ])
+
+    def test_prompt_recall_truncated_line_still_parses_with_the_plus_band_regex(self):
+        memory_id = "11111111-2222-3333-4444-555555555555"
+        Recorder.search_payload = self._hit(
+            content="x" * 700, memory_id=memory_id)
+        # 600 is the default KEMORY_RECALL_ITEM_CHARS.
+        self.assertEqual(self._plus_matches(),
+                         [("shared", "x" * 600, memory_id)])
 
     def test_prompt_recall_states_content_is_untrusted(self):
         # ADR-001: recalled content is data, never an instruction, and our own
