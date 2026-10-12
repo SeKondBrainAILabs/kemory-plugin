@@ -452,6 +452,11 @@ class HookTest(unittest.TestCase):
         events = self.DECISION + [self.assistant(tool="mcp__kemory__kemory_store_memory")]
         self.assertEqual(self._nudge(events), "")
 
+    def test_nudge_is_silent_when_the_turn_stored_under_grok(self):
+        # Grok Build names the tool kemory__kemory_store_memory (no mcp__).
+        events = self.DECISION + [self.assistant(tool="kemory__kemory_store_memory")]
+        self.assertEqual(self._nudge(events), "")
+
     def test_nudge_is_silent_when_a_write_alias_was_used(self):
         # kemory_memory is an alias of kemory_store_memory and reads like a read.
         events = self.DECISION + [self.assistant(tool="mcp__x__kemory_memory")]
@@ -637,6 +642,30 @@ class HookTest(unittest.TestCase):
             for name in (f"mcp__plugin_kemory_kemory__kemory_{tool}", f"kemory__kemory_{tool}"):
                 with self.subTest(name=name):
                     self.assertIsNone(rx.match(name), f"{name} is a write")
+
+    def test_every_kemory_matcher_treats_grok_names_like_claude_code_names(self):
+        # Grok Build names an MCP tool <server>__<tool>, with no mcp__ prefix.
+        # A matcher written for Claude Code alone matches nothing there, and the
+        # hook silently never runs. Any matcher naming Kemory tools, now or
+        # later, must decide the same way for both spellings.
+        import re
+        hooks = json.loads((ROOT / "plugin" / "hooks" / "hooks.json").read_text())
+        tools = ("recall", "recall_memory", "get_context", "ask", "find_similar",
+                 "get_compressed", "get_raw", "get_session_context",
+                 "get_namespace_summary", "get_profile", "get_user_context",
+                 "get_history", "list_namespaces", "whoami", "memory",
+                 "store_memory", "store_skill", "delete_memory", "forget",
+                 "rate_memory", "capture_session", "consolidate_session")
+        matchers = [g["matcher"] for groups in hooks["hooks"].values()
+                    for g in groups if "kemory" in g.get("matcher", "")]
+        self.assertTrue(matchers)
+        for matcher in matchers:
+            rx = re.compile(matcher)
+            for tool in tools:
+                claude = f"mcp__plugin_kemory_kemory__kemory_{tool}"
+                for other in (f"kemory__kemory_{tool}", f"mcp__kemory__kemory_{tool}"):
+                    with self.subTest(matcher=matcher, name=other):
+                        self.assertEqual(bool(rx.match(other)), bool(rx.match(claude)))
 
     def test_injection_hooks_are_synchronous(self):
         # An async hook's stdout is discarded, so an async SessionStart /
