@@ -16,10 +16,15 @@ analytics and no third-party endpoint of its own.
 |------|-------|--------------------------|---------|
 | context injection | `SessionStart` | Your credential only; reads your namespace summaries back | on |
 | prompt recall | `UserPromptSubmit` | **The text of your prompt**, as a search query | on |
-| recall approval | `PreToolUse` | Nothing — runs entirely locally | on |
 | rate reminder | `PostToolUse` | Nothing — runs entirely locally | on |
 | store nudge | `Stop` | Nothing — reads the transcript on your machine and prints guidance | **off** |
 | session capture | `Stop`, `SessionEnd` | Your own prompts: last 12 turns, 8000 characters max, redacted, stored `user-private` in `user:sessions` | on |
+
+The optional `kemory-plus` plugin is separate and is not covered by this
+table. It calls Kemory through this plugin's server when you save, rate or
+delete a memory, checks that your credential works against the Kemory API,
+reads the latest version numbers from GitHub to tell you about updates, and
+runs "Suggest memories" as a model call in your own Claude Code session.
 
 Prompt recall skips prompts under 12 characters and any prompt starting with
 `/`, `!` or `#`, so slash commands are never sent. Separately, when a stored

@@ -30,6 +30,25 @@ turn on.
   A bounded, redacted digest of what the session was about, stored at the end
 - **`/kemory:status`** — one command that says what is and is not working
 
+## kemory and kemory-plus
+
+This marketplace has two plugins. `kemory` is the memory itself. `kemory-plus`
+is an optional add-on that shows that memory in Claude Code's interface.
+
+| | `kemory` | `kemory-plus` |
+|---|---|---|
+| What it is | Memory: the MCP server, hooks and skills | Kemory in Claude Code's interface |
+| What you get | The Kemory tools, prompt recall, session context, rate reminder, session capture, `/kemory:login`, `/kemory:status` | A status line that says whether Kemory works, the memories in context above the prompt, a card on each save and recall, the `/kemory-plus:memories` panel (rate, delete, save the last reply, suggest memories), `/kemory-plus:remember`, `/kemory-plus:learned`, and auto-approval of read-only Kemory tools |
+| Runs on | Claude Code and Grok Build | Claude Code 2.1.267 and later; older builds and Grok ignore it |
+| Needs | A Kemory account | `kemory`, whose server and credential it uses |
+| Source | This repository | [kemory-plus](https://github.com/SeKondBrainAILabs/kemory-plus) |
+
+They are separate because the Claude plugin directory holds back plugins that
+ship an interface module or a hook that approves tool calls. Both live in
+`kemory-plus`, so `kemory` can be listed in the directory on its own. Without
+`kemory-plus`, everything in the left column works the same, and read-only
+Kemory tools ask for permission like any other tool.
+
 ## Install
 
 In a Claude Code **terminal**:
@@ -54,13 +73,8 @@ fully, then run `/kemory:status`.
 It signs you in the same way the Kemory CLI does and writes the same file, so
 if you install the CLI later it finds you already signed in.
 
-**Optional: `kemory-plus`.** On Claude Code 2.1.267 and later it adds a status
-line that says whether Kemory works, the memories in context above the prompt,
-cards on each save and recall, and `/kemory-plus:memories`, a panel to review,
-rate, save and delete memories. It also auto-approves read-only Kemory tools so
-recall costs no permission prompt. It needs `kemory` installed, and lives in
-its own repository,
-[kemory-plus](https://github.com/SeKondBrainAILabs/kemory-plus):
+**Optional: `kemory-plus`**, for the interface described in
+[kemory and kemory-plus](#kemory-and-kemory-plus). Install it after `kemory`:
 
 ```
 /plugin install kemory-plus@kemory
@@ -140,11 +154,12 @@ the version you are on, and [CHANGELOG.md](CHANGELOG.md) says what moved.
 |------|------|--------------|---------------------|---------|
 | context injection | `SessionStart` | Injects your namespace summaries; warns once if Kemory isn't set up | Your credential; reads summaries back | on |
 | prompt recall | `UserPromptSubmit` | Searches your vault with the prompt you typed and injects what matches | **The text of your prompt** | on |
-| recall approval | `PreToolUse` | Auto-approves Kemory read tools so memory stops interrupting you | Nothing | on |
 | rate reminder | `PostToolUse` | Prompts the agent to rate the memories it actually used | Nothing | on |
 | consolidate reminder | `SessionStart` after compaction | Prompts the agent to store facts that would otherwise survive only as a summary | Nothing | on |
 | store nudge | `Stop` | When the turn settled something durable and no Kemory write happened, asks for it before the turn ends | Nothing | **off** |
 | session capture | `Stop`, `SessionEnd` | Stores a redacted digest of your own prompts: last 12 turns, 8000 characters | Your prompts, redacted | on |
+
+Auto-approval of read-only Kemory tools is in `kemory-plus`, not here.
 
 If you pasted the instruction into `CLAUDE.md` before the plugin shipped one,
 you can delete it — the plugin says so once a week until you do. Keeping both
