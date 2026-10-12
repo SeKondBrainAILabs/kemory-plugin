@@ -3,7 +3,7 @@
 All notable changes to this project are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.12.0] — 2026-10-12
 
 ### Changed
 - **The status line, panel and read-only auto-approval move to `kemory-plus`.**
