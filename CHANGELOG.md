@@ -3,6 +3,21 @@
 All notable changes to this project are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.13.0] — 2026-10-12
+
+### Changed
+- **`kemory-plus` moved to its own repository,
+  [kemory-plus](https://github.com/SeKondBrainAILabs/kemory-plus).** The
+  kemory marketplace still lists it, so `/plugin install kemory-plus@kemory`
+  works as before. Nothing here ships a module or an approval hook any more,
+  and `kemory-plus` releases on its own schedule (0.13.0 makes idle memory
+  suggestions opt-in with `KEMORY_AUTO_SUGGEST=1`).
+- **Changelog entries are fragments.** A PR adds `changes/<topic>.md` instead
+  of editing `CHANGELOG.md`, so two open PRs no longer conflict over the same
+  lines. `scripts/release.py X.Y.Z` folds the fragments into the changelog,
+  bumps every manifest and deletes them. `scripts/check.sh` validates the
+  fragments.
+
 ## [0.12.0] — 2026-10-12
 
 ### Changed
