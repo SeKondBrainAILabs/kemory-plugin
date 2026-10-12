@@ -16,9 +16,11 @@
     },
     {
       "name": "kemory-plus",
-      "source": "./plus",
-      "description": "Kemory inside Claude Code: a status line that says whether memory works, the memories in context above the prompt, transcript cards, and a panel to review, rate, save and delete memories. Auto-approves read-only Kemory tools. Requires the kemory plugin.",
-      "version": "0.12.0"
+      "source": {
+        "source": "github",
+        "repo": "SeKondBrainAILabs/kemory-plus"
+      },
+      "description": "Kemory inside Claude Code: a status line that says whether memory works, the memories in context above the prompt, transcript cards, and a panel to review, rate, save and delete memories. Auto-approves read-only Kemory tools. Requires the kemory plugin."
     }
   ]
 }

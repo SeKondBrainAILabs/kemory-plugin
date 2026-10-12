@@ -23,6 +23,10 @@ Thanks for helping improve the Kemory plugin. By taking part you agree to the
 
 This validates every JSON manifest and shell script. CI runs the same script.
 
+Describe a change for users in a changelog fragment, `changes/<topic>.md`,
+not in `CHANGELOG.md`. [changes/README.md](changes/README.md) has the format
+and the release steps.
+
 ## Testing hooks locally
 
 Pipe a synthetic payload into the script the way the harness would:
