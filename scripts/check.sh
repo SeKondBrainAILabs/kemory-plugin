@@ -108,6 +108,15 @@ else
   echo "  ok   no tracker ids or Notion links"
 fi
 
+# Each PR adds changes/<topic>.md; scripts/release.py folds them in at
+# release time. A malformed one would fail the release, not the PR.
+echo "→ changelog fragments"
+if fragments_report=$(python3 scripts/release.py --check 2>&1); then
+  echo "  ok   $fragments_report"
+else
+  printf '  FAIL %s\n' "$fragments_report"; fail=1
+fi
+
 echo "→ hooks reference existing scripts"
 while IFS= read -r s; do
   s="${s/\$\{CLAUDE_PLUGIN_ROOT\}/plugin}"
