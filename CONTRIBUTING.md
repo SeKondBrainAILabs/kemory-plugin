@@ -13,7 +13,13 @@ Thanks for helping improve the Kemory plugin. By taking part you agree to the
   `scripts/mcp.sh` exits non-zero with a reason when it finds no credential.
   A silent no-op there produces an MCP server that looks connected and serves
   no tools, which hides a misconfiguration instead of reporting it.
-- Anything that sends data anywhere must be **opt-in and documented**.
+- Anything that sends data anywhere must be **opt-in and documented**. Two
+  exceptions are on by default: session capture (`capture.sh`,
+  `KEMORY_AUTO_CAPTURE=0` turns it off) and prompt recall (`prompt-recall.sh`,
+  `KEMORY_PROMPT_RECALL=0` turns it off), because a memory plugin that
+  remembers nothing unless you first find a flag is not doing its job. They
+  must stay documented in the privacy section of `README.md` and in
+  `plugin/README.md`.
 
 ## Before opening a PR
 

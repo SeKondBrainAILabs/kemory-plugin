@@ -52,13 +52,7 @@ else
     info "found an API key in $mcp_key, which the hooks cannot read"
     info "export that same key as KEMORY_API_KEY to turn the hooks on"
   else
-    if command -v kemory >/dev/null 2>&1; then
-      info "run /kemory:login (browser sign-in), or set KEMORY_API_KEY"
-    else
-      # /kemory:login ships with the plugin, so there is no longer a machine
-      # where the best route has to be installed first.
-      info "run /kemory:login (browser sign-in), or set KEMORY_API_KEY"
-    fi
+    info "run /kemory:login (browser sign-in), or set KEMORY_API_KEY"
   fi
 fi
 
@@ -289,7 +283,7 @@ echo
 echo "SETTINGS"
 if [ "${KEMORY_AUTO_CAPTURE:-1}" = "1" ]; then
   ok "session capture ENABLED (default) — digests of your prompts are uploaded at session end"
-  info "namespace: ${KEMORY_CAPTURE_NAMESPACE:-shared}, last ${KEMORY_CAPTURE_MAX_TURNS:-12} turns"
+  info "namespace: ${KEMORY_CAPTURE_NAMESPACE:-$KEMORY_DEFAULT_CAPTURE_NAMESPACE}, last ${KEMORY_CAPTURE_MAX_TURNS:-12} turns"
   info "turn it off with KEMORY_AUTO_CAPTURE=0"
 else
   info "session capture disabled — KEMORY_AUTO_CAPTURE=0 is set"

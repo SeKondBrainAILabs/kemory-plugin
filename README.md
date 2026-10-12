@@ -214,14 +214,18 @@ redaction does and does not guarantee.
 ```
 
 Validates manifests, shell syntax, executable bits, plugin source paths, hook
-script references, and which way the capture default sits. CI runs the same
+script references, the version and content of the two manifests, the bundled
+MCP entry, changelog fragments, leaked internal references, and the hook tests.
+CI runs the same
 script plus shellcheck. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ```
 plugin/
 ├── .claude-plugin/plugin.json
+├── .grok-plugin/plugin.json
 ├── .mcp.json                     bundled MCP entry → scripts/mcp.sh
 ├── hooks/hooks.json
+├── commands/login.md             /kemory:login
 ├── commands/status.md            /kemory:status
 ├── skills/                       kemory, setup
 └── scripts/                      one script per hook, plus lib and redact

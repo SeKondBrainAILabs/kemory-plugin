@@ -38,7 +38,7 @@ export PYTHONDONTWRITEBYTECODE=1
 # Now that capture is on by default they land somewhere private by default too,
 # not in `shared`, whose name reads as team-visible to every engineer who sees
 # it. Set KEMORY_CAPTURE_NAMESPACE to put them somewhere else deliberately.
-export KEMORY_NAMESPACE="${KEMORY_CAPTURE_NAMESPACE:-user:sessions}"
+export KEMORY_NAMESPACE="${KEMORY_CAPTURE_NAMESPACE:-$KEMORY_DEFAULT_CAPTURE_NAMESPACE}"
 export KEMORY_MAX_TURNS="${KEMORY_CAPTURE_MAX_TURNS:-12}"
 export KEMORY_MIN_NEW_TURNS="${KEMORY_CAPTURE_MIN_NEW_TURNS:-3}"
 export KEMORY_CAPTURE_SOURCE="${KEMORY_CAPTURE_SOURCE:-claude-code}"
