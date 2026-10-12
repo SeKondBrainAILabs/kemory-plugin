@@ -30,23 +30,23 @@ turn on.
   A bounded, redacted digest of what the session was about, stored at the end
 - **`/kemory:status`** — one command that says what is and is not working
 
-## kemory and kemory-plus
+## kemory and kemory-panel
 
-This marketplace has two plugins. `kemory` is the memory itself. `kemory-plus`
+This marketplace has two plugins. `kemory` is the memory itself. `kemory-panel`
 is an optional add-on that shows that memory in Claude Code's interface.
 
-| | `kemory` | `kemory-plus` |
+| | `kemory` | `kemory-panel` |
 |---|---|---|
 | What it is | Memory: the MCP server, hooks and skills | Kemory in Claude Code's interface |
-| What you get | The Kemory tools, prompt recall, session context, rate reminder, session capture, `/kemory:login`, `/kemory:status` | A status line that says whether Kemory works, the memories in context above the prompt, a card on each save and recall, the `/kemory-plus:memories` panel (rate, delete, save the last reply, suggest memories), `/kemory-plus:remember`, `/kemory-plus:learned`, and auto-approval of read-only Kemory tools |
+| What you get | The Kemory tools, prompt recall, session context, rate reminder, session capture, `/kemory:login`, `/kemory:status` | A status line that says whether Kemory works, the memories in context above the prompt, a card on each save and recall, the `/kemory-panel:memories` panel (rate, delete, save the last reply, suggest memories), `/kemory-panel:remember`, `/kemory-panel:learned`, and auto-approval of read-only Kemory tools |
 | Runs on | Claude Code and Grok Build | Claude Code 2.1.267 and later; older builds and Grok ignore it |
 | Needs | A Kemory account | `kemory`, whose server and credential it uses |
-| Source | This repository | [kemory-plus](https://github.com/SeKondBrainAILabs/kemory-plus) |
+| Source | This repository | [kemory-panel](https://github.com/SeKondBrainAILabs/kemory-panel) |
 
 They are separate because the Claude plugin directory holds back plugins that
 ship an interface module or a hook that approves tool calls. Both live in
-`kemory-plus`, so `kemory` can be listed in the directory on its own. Without
-`kemory-plus`, everything in the left column works the same, and read-only
+`kemory-panel`, so `kemory` can be listed in the directory on its own. Without
+`kemory-panel`, everything in the left column works the same, and read-only
 Kemory tools ask for permission like any other tool.
 
 ## Install
@@ -73,11 +73,11 @@ fully, then run `/kemory:status`.
 It signs you in the same way the Kemory CLI does and writes the same file, so
 if you install the CLI later it finds you already signed in.
 
-**Optional: `kemory-plus`**, for the interface described in
-[kemory and kemory-plus](#kemory-and-kemory-plus). Install it after `kemory`:
+**Optional: `kemory-panel`**, for the interface described in
+[kemory and kemory-panel](#kemory-and-kemory-panel). Install it after `kemory`:
 
 ```
-/plugin install kemory-plus@kemory
+/plugin install kemory-panel@kemory
 ```
 
 <details>
@@ -159,7 +159,7 @@ the version you are on, and [CHANGELOG.md](CHANGELOG.md) says what moved.
 | store nudge | `Stop` | When the turn settled something durable and no Kemory write happened, asks for it before the turn ends | Nothing | **off** |
 | session capture | `Stop`, `SessionEnd` | Stores a redacted digest of your own prompts: last 12 turns, 8000 characters | Your prompts, redacted | on |
 
-Auto-approval of read-only Kemory tools is in `kemory-plus`, not here.
+Auto-approval of read-only Kemory tools is in `kemory-panel`, not here.
 
 If you pasted the instruction into `CLAUDE.md` before the plugin shipped one,
 you can delete it — the plugin says so once a week until you do. Keeping both

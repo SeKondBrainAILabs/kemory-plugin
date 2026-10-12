@@ -3,6 +3,32 @@
 All notable changes to this project are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.13.2] — 2026-10-12
+
+### Changed
+- **`kemory-plus` is now `kemory-panel`.** It is the same optional add-on,
+  Kemory's interface in Claude Code, under a name that does not read like a
+  paid tier. Its commands are now `/kemory-panel:memories`,
+  `/kemory-panel:remember` and `/kemory-panel:learned`. If you installed
+  `kemory-plus`, switch with `/plugin uninstall kemory-plus@kemory`, then
+  `/plugin install kemory-panel@kemory`.
+
+### Fixed
+- **PRIVACY.md and SECURITY.md now match what the plugin does.** They list the credential file `/kemory:login` writes, every local state file, and every endpoint the plugin contacts.
+
+## [0.13.1] — 2026-10-12
+
+### Notes
+- The README explains `kemory` and `kemory-plus` side by side: what each
+  gives you, where each runs, and why they are separate. `PRIVACY.md` and the
+  hook tables no longer list read-only auto-approval as a `kemory` hook, since
+  it moved to `kemory-plus` in 0.12.0, and `PRIVACY.md` now says what
+  `kemory-plus` sends.
+- Tests now hold every Kemory tool matcher to Grok Build's tool names
+  (`kemory__kemory_*`, no `mcp__` prefix) as well as Claude Code's, so a new
+  hook cannot silently skip Grok. The store nudge is tested with a Grok store
+  call too.
+
 ## [0.13.0] — 2026-10-12
 
 ### Changed

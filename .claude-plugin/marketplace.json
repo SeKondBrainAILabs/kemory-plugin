@@ -12,13 +12,13 @@
       "name": "kemory",
       "source": "./plugin",
       "description": "Persistent cross-session memory via Kemory: hooks that keep recall quality improving, a skill for using memory well, and session capture, on by default.",
-      "version": "0.13.0"
+      "version": "0.13.2"
     },
     {
-      "name": "kemory-plus",
+      "name": "kemory-panel",
       "source": {
         "source": "github",
-        "repo": "SeKondBrainAILabs/kemory-plus"
+        "repo": "SeKondBrainAILabs/kemory-panel"
       },
       "description": "Kemory inside Claude Code: a status line that says whether memory works, the memories in context above the prompt, transcript cards, and a panel to review, rate, save and delete memories. Auto-approves read-only Kemory tools. Requires the kemory plugin."
     }

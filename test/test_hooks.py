@@ -10,6 +10,7 @@ import http.server
 import json
 import os
 import pathlib
+import re
 import shutil
 import subprocess
 import sys
@@ -680,7 +681,7 @@ class HookTest(unittest.TestCase):
 
     def test_core_plugin_holds_no_approval_hook_or_module(self):
         # The plugin directory holds back any version whose hooks approve
-        # tool calls or that ships a mod. Both live in kemory-plus, a separate
+        # tool calls or that ships a mod. Both live in kemory-panel, a separate
         # repository, so that kemory itself can reach users.
         hooks = json.loads((ROOT / "plugin" / "hooks" / "hooks.json").read_text())
         self.assertNotIn("PreToolUse", hooks["hooks"])
@@ -2861,6 +2862,59 @@ class ReleaseScriptTest(unittest.TestCase):
         r = subprocess.run([sys.executable, str(ROOT / "scripts" / "release.py"), "--check"],
                            text=True, capture_output=True)
         self.assertEqual(r.returncode, 0, r.stdout)
+
+
+KEMORY_PATH_PATTERNS = (
+    re.compile(r"\.kemory/(\.?[A-Za-z0-9_-]+)"),
+    re.compile(r"""["']\.kemory["']\s*,\s*f?["'](\.?[A-Za-z0-9_-]+)"""),
+)
+
+
+def kemory_paths_missing_from_privacy(source_texts, privacy_text):
+    """Names under ~/.kemory that the sources use and PRIVACY.md does not list.
+
+    A name is listed when PRIVACY.md holds `~/.kemory/<name>` not followed by
+    another name character, so `~/.kemory/.recalled/` covers `.recalled` but
+    `~/.kemory/credentials-<env>` does not cover `credentials`.
+    """
+    names = set()
+    for text in source_texts:
+        for pattern in KEMORY_PATH_PATTERNS:
+            for name in pattern.findall(text):
+                names.add("credentials-<env>" if name.startswith("credentials-") else name)
+    return sorted(
+        name for name in names
+        if not re.search(r"~/\.kemory/" + re.escape(name) + r"(?![A-Za-z0-9_-])", privacy_text)
+    )
+
+
+class PrivacyDocTest(unittest.TestCase):
+    def test_every_kemory_path_in_scripts_is_listed_in_privacy(self):
+        sources = [
+            path.read_text(errors="replace")
+            for folder in (SCRIPTS, ROOT / "plugin" / "hooks")
+            for path in sorted(folder.rglob("*")) if path.is_file()
+        ]
+        privacy = (ROOT / "PRIVACY.md").read_text(errors="replace")
+        missing = kemory_paths_missing_from_privacy(sources, privacy)
+        self.assertEqual(missing, [], f"PRIVACY.md does not list: {missing}")
+
+    def test_scanner_reports_an_unlisted_path(self):
+        source = 'open(os.path.expanduser("~/.kemory/.bogus"))'
+        self.assertEqual(
+            kemory_paths_missing_from_privacy([source], "`~/.kemory/.captured/`"),
+            [".bogus"])
+
+    def test_scanner_reads_os_path_join_form(self):
+        source = 'os.path.join(home, ".kemory", f"credentials-{ENV}")'
+        self.assertEqual(kemory_paths_missing_from_privacy([source], ""),
+                         ["credentials-<env>"])
+
+    def test_bare_credentials_not_satisfied_by_env_file(self):
+        source = 'creds="$HOME/.kemory/credentials"'
+        self.assertEqual(
+            kemory_paths_missing_from_privacy([source], "`~/.kemory/credentials-<env>`"),
+            ["credentials"])
 
 
 if __name__ == "__main__":

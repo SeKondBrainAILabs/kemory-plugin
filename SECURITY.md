@@ -13,17 +13,21 @@ prompts to the Kemory instance you have configured. Review
 [plugin/README.md](plugin/README.md) and [PRIVACY.md](PRIVACY.md) for what
 that covers, and set the variable to `0` if you do not want it.
 
-**Redaction is best-effort.** `scripts/capture.sh` strips common secret
+**Redaction is best-effort.** `plugin/scripts/capture.sh` strips common secret
 shapes (bearer tokens, `api_key=`/`password=` assignments, `sk-`, `gh*_`,
 AWS access key ids, PEM private-key headers) before upload. This is
 pattern-matching, not a guarantee — a novel or unusual secret format can pass
 through. If you work with sensitive material, leave capture disabled.
 
-**Local state.** Capture writes a digest hash per session under
-`~/.kemory/.captured/` for de-duplication, and the setup notice writes a
-timestamp to `~/.kemory/.setup-hint`. Neither contains conversation content.
+**Local state.** The files the plugin writes under `~/.kemory/`, and what each
+holds, are listed in the Local files section of [PRIVACY.md](PRIVACY.md).
 
-**Credentials** are read from the Kemory CLI's local credential file, or from
-`KEMORY_URL` / `KEMORY_TOKEN`. The plugin never writes credentials anywhere
-and never logs them, and refuses to send them to a URL that is not
-`http://` or `https://`.
+**Credentials.** The hooks resolve them in this order: `KEMORY_API_KEY`, then
+`KEMORY_TOKEN`, then `~/.kemory/credentials-${KEMORY_ENV:-prod}`, then
+`~/.kemory/credentials`. `KEMORY_URL` picks the instance and defaults to hosted
+Kemory. `/kemory:login` writes `~/.kemory/credentials-<env>`, and the hooks
+rewrite the credential file they read when they refresh an expired OAuth token.
+The file holds an access token and a refresh token, is replaced atomically with
+mode 0600, and is never logged or sent anywhere except in the refresh request
+to the identity provider named in the file. The plugin refuses to send
+credentials to a URL that is not `http://` or `https://`.

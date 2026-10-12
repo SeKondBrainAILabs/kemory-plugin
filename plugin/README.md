@@ -13,8 +13,8 @@ Hooks and a skill that make Claude Code use Kemory memory well.
 | `capture.sh` | `Stop`, `SessionEnd` | **On by default** (`KEMORY_AUTO_CAPTURE=0` opts out). Stores new turns as redacted episodic memories as the session goes, so a killed session still leaves its work behind |
 
 Read-only auto-approval, the status line and the in-app panel are in the
-separate `kemory-plus` plugin,
-[SeKondBrainAILabs/kemory-plus](https://github.com/SeKondBrainAILabs/kemory-plus).
+separate `kemory-panel` plugin,
+[SeKondBrainAILabs/kemory-panel](https://github.com/SeKondBrainAILabs/kemory-panel).
 
 Plus:
 
@@ -152,10 +152,11 @@ export KEMORY_AUTO_CAPTURE=0
 | `KEMORY_API_KEY` | — | API key from kemory.sekondbrain.ai, sent as `X-API-Key` |
 
 All hooks that reach the API share one credential resolver
-(`scripts/lib.sh`): the CLI's `~/.kemory/credentials` if present, otherwise
-`KEMORY_API_KEY` or `KEMORY_TOKEN`, against `KEMORY_URL` (defaulting to
-hosted Kemory). `kemory login` is the recommended route — OAuth browser
-sign-in, nothing to paste, and it writes the credentials the hooks read. The
+(`scripts/lib.sh`): `KEMORY_API_KEY`, then `KEMORY_TOKEN`, then
+`~/.kemory/credentials-${KEMORY_ENV:-prod}`, then `~/.kemory/credentials`,
+against `KEMORY_URL` (defaulting to hosted Kemory). `/kemory:login` or
+`kemory login` is the recommended route — OAuth sign-in, nothing to paste, and
+it writes the file the hooks read. The
 API accepts either credential style. With none of those, every hook stays
 silent.
 
