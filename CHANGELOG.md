@@ -3,6 +3,19 @@
 All notable changes to this project are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.13.2] — 2026-10-12
+
+### Changed
+- **`kemory-plus` is now `kemory-panel`.** It is the same optional add-on,
+  Kemory's interface in Claude Code, under a name that does not read like a
+  paid tier. Its commands are now `/kemory-panel:memories`,
+  `/kemory-panel:remember` and `/kemory-panel:learned`. If you installed
+  `kemory-plus`, switch with `/plugin uninstall kemory-plus@kemory`, then
+  `/plugin install kemory-panel@kemory`.
+
+### Fixed
+- **PRIVACY.md and SECURITY.md now match what the plugin does.** They list the credential file `/kemory:login` writes, every local state file, and every endpoint the plugin contacts.
+
 ## [0.13.1] — 2026-10-12
 
 ### Notes
