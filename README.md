@@ -54,6 +54,16 @@ fully, then run `/kemory:status`.
 It signs you in the same way the Kemory CLI does and writes the same file, so
 if you install the CLI later it finds you already signed in.
 
+**Optional: `kemory-plus`.** On Claude Code 2.1.267 and later it adds a status
+line that says whether Kemory works, the memories in context above the prompt,
+cards on each save and recall, and `/kemory-plus:memories`, a panel to review,
+rate, save and delete memories. It also auto-approves read-only Kemory tools so
+recall costs no permission prompt. It needs `kemory` installed:
+
+```
+/plugin install kemory-plus@kemory
+```
+
 <details>
 <summary>Already reach Kemory another way?</summary>
 

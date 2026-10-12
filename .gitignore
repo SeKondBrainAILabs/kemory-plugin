@@ -6,3 +6,8 @@
 __pycache__/
 node_modules/
 .serena/
+
+# Written by Claude Code when it loads a plugin folder with a hooks module
+# (editor typing for the module); local, not part of the plugin.
+*/tsconfig.json
+*/.claude-plugin/types/

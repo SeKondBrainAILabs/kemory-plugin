@@ -3,6 +3,20 @@
 All notable changes to this project are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+- **The status line, panel and read-only auto-approval move to `kemory-plus`.**
+  The plugin directory holds back any version whose hooks approve tool calls
+  or that ships a mod, and it had held every version since 0.8.1, so directory
+  users received none of the fixes since. `kemory` is now plain hooks and
+  skills. `kemory-plus`, in the same marketplace, carries the module (status
+  line, band, cards, panel, suggested memories, one set of tools with the
+  connector) and `recall-approve.sh`. Its commands are `/kemory-plus:memories`,
+  `/kemory-plus:remember` and `/kemory-plus:learned`. To keep them, run
+  `/plugin install kemory-plus@kemory`. Without it, read-only Kemory tools ask
+  for permission like any other tool.
+
 ## [0.11.1] — 2026-10-11
 
 ### Changed
