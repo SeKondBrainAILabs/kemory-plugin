@@ -1,5 +1,5 @@
 {
-  "description": "Kemory: persistent memory for Claude Code. Hooks whose output is READ — SessionStart, UserPromptSubmit — must stay synchronous: an async hook's stdout is discarded, which would silently kill context injection while still appearing to run. They fail open instead, with every network call capped (3-6s) so a dead network never stalls a session. Capture writes and has no output anyone reads, so it runs async on both Stop and SessionEnd. The status line, panel and read-only auto-approval live in the separate kemory-plus plugin.",
+  "description": "Kemory: persistent memory for Claude Code. Hooks whose output is READ — SessionStart, UserPromptSubmit — must stay synchronous: an async hook's stdout is discarded, which would silently kill context injection while still appearing to run. They fail open instead, with every network call capped (3-6s) so a dead network never stalls a session. Capture writes and has no output anyone reads, so it runs async on both Stop and SessionEnd. The status line, panel and read-only auto-approval live in the separate kemory-panel plugin.",
   "hooks": {
     "SessionStart": [
       {
