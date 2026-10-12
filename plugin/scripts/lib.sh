@@ -15,6 +15,7 @@ KEMORY_DEFAULT_URL="${KEMORY_DEFAULT_URL:-https://api.kemory.s9n.ai}"
 
 # Where capture writes digests unless KEMORY_CAPTURE_NAMESPACE says otherwise;
 # capture.sh and status.sh both read it.
+# shellcheck disable=SC2034  # read by the scripts that source this file
 KEMORY_DEFAULT_CAPTURE_NAMESPACE="user:sessions"
 
 # A cached credential keeps the API host it was written with, so a host that has
