@@ -681,7 +681,7 @@ class HookTest(unittest.TestCase):
 
     def test_core_plugin_holds_no_approval_hook_or_module(self):
         # The plugin directory holds back any version whose hooks approve
-        # tool calls or that ships a mod. Both live in kemory-plus, a separate
+        # tool calls or that ships a mod. Both live in kemory-panel, a separate
         # repository, so that kemory itself can reach users.
         hooks = json.loads((ROOT / "plugin" / "hooks" / "hooks.json").read_text())
         self.assertNotIn("PreToolUse", hooks["hooks"])

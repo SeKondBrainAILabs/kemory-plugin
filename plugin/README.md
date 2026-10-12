@@ -13,8 +13,8 @@ Hooks and a skill that make Claude Code use Kemory memory well.
 | `capture.sh` | `Stop`, `SessionEnd` | **On by default** (`KEMORY_AUTO_CAPTURE=0` opts out). Stores new turns as redacted episodic memories as the session goes, so a killed session still leaves its work behind |
 
 Read-only auto-approval, the status line and the in-app panel are in the
-separate `kemory-plus` plugin,
-[SeKondBrainAILabs/kemory-plus](https://github.com/SeKondBrainAILabs/kemory-plus).
+separate `kemory-panel` plugin,
+[SeKondBrainAILabs/kemory-panel](https://github.com/SeKondBrainAILabs/kemory-panel).
 
 Plus:
 

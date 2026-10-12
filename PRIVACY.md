@@ -35,7 +35,7 @@ and does not contact the network. These are all of its calls:
 | store nudge | `Stop` | Nothing — reads the transcript on your machine and prints guidance | **off** |
 | session capture | `Stop`, `SessionEnd` | Your own prompts: last 12 turns, 8000 characters max, redacted, stored `user-private` in `user:sessions` | on |
 
-The optional `kemory-plus` plugin is separate and is not covered by this
+The optional `kemory-panel` plugin is separate and is not covered by this
 table. It calls Kemory through this plugin's server when you save, rate or
 delete a memory, checks that your credential works against the Kemory API,
 reads the latest version numbers from GitHub to tell you about updates, and
@@ -44,10 +44,10 @@ runs "Suggest memories" as a model call in your own Claude Code session.
 Prompt recall skips prompts under 12 characters and any prompt starting with
 `/`, `!` or `#`, so slash commands are never sent.
 
-## kemory-plus
+## kemory-panel
 
-`kemory-plus` is a separate, optional plugin from its own repository,
-<https://github.com/SeKondBrainAILabs/kemory-plus>. This document does not
+`kemory-panel` is a separate, optional plugin from its own repository,
+<https://github.com/SeKondBrainAILabs/kemory-panel>. This document does not
 cover it, and it makes calls of its own. Among them, at session start and
 every 10 minutes it sends a GET, with no credential and no conversation
 content, to
