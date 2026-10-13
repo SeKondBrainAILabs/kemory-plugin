@@ -367,7 +367,7 @@ command -v curl >/dev/null 2>&1 || { emit_instruction_only; exit 0; }
 
 DEPTH="${KEMORY_CONTEXT_DEPTH:-l3}"
 RESP="$(curl -s --max-time "${KEMORY_CONTEXT_TIMEOUT:-6}" \
-  -H "$KEMORY_AUTH_HEADER" \
+  -H "$KEMORY_AUTH_HEADER" ${KEMORY_ORG_HEADER:+-H "$KEMORY_ORG_HEADER"} \
   "$KEMORY_BASE_URL/api/v1/user/context?depth=$DEPTH" 2>/dev/null)" \
   || { emit_instruction_only; exit 0; }
 [ -n "$RESP" ] || { emit_instruction_only; exit 0; }

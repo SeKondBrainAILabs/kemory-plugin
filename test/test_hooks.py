@@ -1462,6 +1462,46 @@ class CredentialTest(unittest.TestCase):
                          "fresh-token", "the refresh must be written back")
         self.assertIn("expired=0", out)
 
+    def org_header(self, **env):
+        e = {k: v for k, v in os.environ.items() if not k.startswith("KEMORY_")}
+        e["HOME"] = self.home
+        e.update(env)
+        script = (f'. "{SCRIPTS}/lib.sh"; kemory_resolve_auth'
+                  ' && echo "org=[${KEMORY_ORG_HEADER}]"')
+        return subprocess.run(["bash", "-c", script], text=True,
+                              capture_output=True, env=e).stdout.strip()
+
+    def test_hooks_follow_the_organisation_kemory_use_selected(self):
+        # `kemory use` writes active_org_id and the CLI sends it on every
+        # request. Without it, the hooks read and wrote the token's own
+        # organisation while the MCP tools followed the selection.
+        self.write_creds(expires_at=time.time() + 3600, org_id="org-a",
+                         active_org_id="org-b")
+        self.assertEqual(self.org_header(), "org=[X-Organization-ID: org-b]")
+
+    def test_no_organisation_header_without_a_selection(self):
+        self.write_creds(expires_at=time.time() + 3600, org_id="org-a")
+        self.assertEqual(self.org_header(), "org=[]")
+
+    def test_no_organisation_header_for_an_api_key(self):
+        # An API key is scoped to its own organisation.
+        self.write_creds(expires_at=time.time() + 3600, active_org_id="org-b")
+        self.assertEqual(self.org_header(KEMORY_API_KEY="k",
+                                         KEMORY_URL=f"http://127.0.0.1:{self.port}"),
+                         "org=[]")
+
+    def test_prompt_recall_sends_the_selected_organisation(self):
+        self.write_creds(expires_at=time.time() + 3600, active_org_id="org-b")
+        e = {k: v for k, v in os.environ.items() if not k.startswith("KEMORY_")}
+        e["HOME"] = self.home
+        subprocess.run([str(SCRIPTS / "prompt-recall.sh")], text=True,
+                       capture_output=True, env=e, timeout=30,
+                       input=json.dumps({"session_id": "s", "hook_event_name": "UserPromptSubmit",
+                                         "prompt": "where does the kemory plugin keep its credential?"}))
+        sent = [h.get("X-Organization-ID") for h, _, _ in Recorder.posts]
+        self.assertTrue(sent, "prompt recall made no request")
+        self.assertEqual(set(sent), {"org-b"})
+
     def test_live_token_is_not_refreshed(self):
         self.write_creds(expires_at=time.time() + 3600,
                          access_token="still-good")
@@ -3147,6 +3187,20 @@ class ConnectorStatusTest(unittest.TestCase):
         yield {"numStartups": 3}
         yield {"claudeAiMcpEverConnected": "claude.ai Kemory"}
         yield {"claudeAiMcpEverConnected": {"claude.ai Kemory": True}}
+
+    def test_status_skips_the_connector_under_grok(self):
+        # ~/.claude.json exists wherever Claude Code does, but a claude.ai
+        # connector never runs in a Grok session: naming it, and /mcp, is wrong.
+        self.write_config({"claudeAiMcpEverConnected": ["claude.ai Kemory by SeKondBrain"]})
+        grok = str(pathlib.Path(self.home) / ".grok" / "installed-plugins" / "k" / "plugin")
+        out = self.status(CLAUDE_PLUGIN_ROOT=grok).stdout
+        self.assertNotIn("claude.ai Kemory", out)
+        self.assertNotIn("under /mcp", out)
+
+    def test_status_still_names_the_connector_under_claude_code(self):
+        self.write_config({"claudeAiMcpEverConnected": ["claude.ai Kemory by SeKondBrain"]})
+        out = self.status(CLAUDE_PLUGIN_ROOT=str(ROOT / "plugin")).stdout
+        self.assertIn("claude.ai Kemory by SeKondBrain", out)
 
     def test_status_names_a_connector_that_has_connected(self):
         self.write_config({"claudeAiMcpEverConnected":

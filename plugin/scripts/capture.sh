@@ -71,6 +71,8 @@ def env_int(name, default):
 try:
     url = os.environ["KEMORY_BASE_URL"]
     auth_name, _, auth_value = os.environ["KEMORY_AUTH_HEADER"].partition(": ")
+    # The organisation `kemory use` selected, as the CLI sends it (lib.sh).
+    org_name, _, org_value = os.environ.get("KEMORY_ORG_HEADER", "").partition(": ")
     hook = json.loads(os.environ["HOOK_INPUT"])
 except Exception:
     die()
@@ -206,6 +208,7 @@ req = urllib.request.Request(
     }).encode(),
     headers={
         auth_name: auth_value,
+        **({org_name: org_value} if org_value else {}),
         "Content-Type": "application/json",
     },
     method="POST",

@@ -56,6 +56,9 @@ _session_id: str | None = None
 # started us signed out. Replaced by _resolve() when a reply says it is needed.
 _base_url: str = (os.environ.get("KEMORY_BASE_URL") or "").rstrip("/")
 _auth_header: str = os.environ.get("KEMORY_AUTH_HEADER") or ""
+# The organisation `kemory use` selected (lib.sh), sent beside the credential
+# as the CLI sends it. Empty when none is selected.
+_org_header: str = os.environ.get("KEMORY_ORG_HEADER") or ""
 
 LIB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib.sh")
 
@@ -75,19 +78,20 @@ def _headers() -> dict[str, str]:
         # Both, so a server that prefers SSE still has a shape to choose.
         "Accept": "application/json, text/event-stream",
     }
-    name, _, value = _auth_header.partition(":")
-    if name and value.strip():
-        headers[name.strip()] = value.strip()
+    for line in (_auth_header, _org_header):
+        name, _, value = line.partition(":")
+        if name and value.strip():
+            headers[name.strip()] = value.strip()
     return headers
 
 
-def _resolve() -> tuple[str, str] | None:
+def _resolve() -> tuple[str, str, str] | None:
     """Ask lib.sh for the credential now: the same resolution, refresh included,
     that mcp.sh and the hooks use. None when there is no usable one."""
     script = ('. "$1" >/dev/null 2>&1 || exit 1; '
               'kemory_resolve_auth >/dev/null 2>&1 || exit 1; '
               '[ "${KEMORY_TOKEN_EXPIRED:-0}" = "1" ] && exit 1; '
-              'printf "%s\n%s\n" "$KEMORY_BASE_URL" "$KEMORY_AUTH_HEADER"')
+              'printf "%s\n%s\n%s\n" "$KEMORY_BASE_URL" "$KEMORY_AUTH_HEADER" "$KEMORY_ORG_HEADER"')
     try:
         r = subprocess.run(["bash", "-c", script, "_", LIB],
                            capture_output=True, text=True, timeout=30)
@@ -96,7 +100,7 @@ def _resolve() -> tuple[str, str] | None:
     lines = r.stdout.splitlines()
     if r.returncode != 0 or len(lines) < 2 or not lines[0] or not lines[1]:
         return None
-    return lines[0].rstrip("/"), lines[1]
+    return lines[0].rstrip("/"), lines[1], lines[2] if len(lines) > 2 else ""
 
 
 def _needs_auth(reply: dict | None, status: int) -> bool:
@@ -190,13 +194,13 @@ def _relay(endpoint: str, headers: dict[str, str], request: dict) -> tuple[dict 
 
 def _answer(request: dict) -> dict | None:
     """Relay one message; when it needs a credential, look again and retry once."""
-    global _base_url, _auth_header
+    global _base_url, _auth_header, _org_header
     reply, status = _relay(_endpoint(), _headers(), request)
     if not _needs_auth(reply, status):
         return reply
     fresh = _resolve()
     if fresh and fresh[1] != _auth_header:
-        _base_url, _auth_header = fresh
+        _base_url, _auth_header, _org_header = fresh
         reply, status = _relay(_endpoint(), _headers(), request)
         if not _needs_auth(reply, status):
             return reply

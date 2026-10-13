@@ -59,7 +59,8 @@ fi
 # --- API reachability ------------------------------------------------------
 if [ -n "${KEMORY_BASE_URL:-}" ] && command -v curl >/dev/null 2>&1; then
   code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 6 \
-          -H "$KEMORY_AUTH_HEADER" "$KEMORY_BASE_URL/api/v1/namespaces" 2>/dev/null || echo 000)"
+          -H "$KEMORY_AUTH_HEADER" ${KEMORY_ORG_HEADER:+-H "$KEMORY_ORG_HEADER"} \
+          "$KEMORY_BASE_URL/api/v1/namespaces" 2>/dev/null || echo 000)"
   api_code="$code"
   case "$code" in
     200)      ok  "API reachable and credentials accepted (HTTP 200)" ;;
@@ -209,7 +210,7 @@ fi
 # hooks use; skipped for an API key, which authenticates as its own agent.
 if [ "${api_code:-}" = "200" ] && [ "${KEMORY_AUTH_HEADER#Authorization:}" != "$KEMORY_AUTH_HEADER" ] \
    && command -v python3 >/dev/null 2>&1; then
-  agents="$(curl -s --max-time 6 -H "$KEMORY_AUTH_HEADER" \
+  agents="$(curl -s --max-time 6 -H "$KEMORY_AUTH_HEADER" ${KEMORY_ORG_HEADER:+-H "$KEMORY_ORG_HEADER"} \
             "$KEMORY_BASE_URL/api/v1/agents?status=active&scope=mine" 2>/dev/null)"
   seen="$(printf '%s' "$agents" | python3 -c '
 import json, sys
@@ -277,9 +278,11 @@ if [ "${others:-0}" -gt 0 ] && [ -z "$duplicate" ]; then
   info "if one of them is meant to be this Kemory, keep a single server"
 fi
 # The claude.ai connector is a Claude-only concept, read from ~/.claude.json.
-# Under another host that file does not exist, and reporting that we could not
-# read it is noise about a product the user may not be running.
-if [ -f "$HOME/.claude.json" ]; then
+# Skipped when that file is absent (no Claude Code here, so reporting that we
+# could not read it is noise), and skipped under Grok even when it is present:
+# it exists on any machine that also has Claude Code, but a claude.ai connector
+# never runs in a Grok session, so "two Kemory servers" and "/mcp" would be wrong.
+if [ -f "$HOME/.claude.json" ] && ! kemory_is_grok; then
 connector=$(kemory_connector_ever_connected)
 case "$connector" in
   seen*)
