@@ -699,9 +699,9 @@ class HookTest(unittest.TestCase):
         self.assertNotIn("modules", hooks)
         self.assertFalse(list((ROOT / "plugin").rglob("*.tsx")))
 
-    def test_capture_is_registered_on_stop_and_session_end(self):
+    def test_capture_is_registered_on_stop_precompact_and_session_end(self):
         hooks = json.loads((ROOT / "plugin" / "hooks" / "hooks.json").read_text())
-        for event in ("Stop", "SessionEnd"):
+        for event in ("Stop", "PreCompact", "SessionEnd"):
             commands = [h["command"] for g in hooks["hooks"][event] for h in g["hooks"]]
             with self.subTest(event=event):
                 self.assertTrue(any("capture.sh" in c for c in commands))
@@ -746,12 +746,20 @@ class HookTest(unittest.TestCase):
         self.assertIn("kemory_consolidate_session",
                       json.loads(r.stdout)["hookSpecificOutput"]["additionalContext"])
 
-    def test_no_precompact_hook_is_registered(self):
+    def test_precompact_runs_only_silent_async_capture(self):
         # PreCompact silently rejected our output on every compaction while
-        # both READMEs advertised the feature. It must not come back.
-        events = json.loads(
-            (ROOT / "plugin" / "hooks" / "hooks.json").read_text())["hooks"]
-        self.assertNotIn("PreCompact", events)
+        # both READMEs advertised a consolidate nudge there, and it can BLOCK
+        # compaction (exit 2 or decision: block). So the only thing allowed on
+        # it is capture: async, writing to the API and printing nothing.
+        groups = json.loads(
+            (ROOT / "plugin" / "hooks" / "hooks.json").read_text())["hooks"]["PreCompact"]
+        hooks = [h for g in groups for h in g["hooks"]]
+        self.assertTrue(hooks)
+        for hook in hooks:
+            with self.subTest(command=hook["command"]):
+                self.assertTrue(hook["command"].endswith("/scripts/capture.sh"))
+                self.assertIs(hook.get("async"), True)
+                self.assertIn("timeout", hook)
 
     def test_session_start_respects_budget(self):
         Recorder.get_payload = {"namespaces": [
@@ -1064,6 +1072,65 @@ class HookTest(unittest.TestCase):
         fixture["transcript_path"] = self.transcript("a", "b", "c")
         self.run_script("capture.sh", fixture,
                         KEMORY_API_KEY="k", KEMORY_AUTO_CAPTURE="1")
+        self.assertEqual(len(Recorder.posts), 1)
+
+    def precompact(self, transcript, session="s", trigger="manual", **env):
+        env.setdefault("KEMORY_API_KEY", "k")
+        fixture = json.loads(
+            (ROOT / "test" / "fixtures" / "precompact.json").read_text())
+        fixture.update(session_id=session, trigger=trigger,
+                       transcript_path=transcript)
+        return self.run_script("capture.sh", fixture, **env)
+
+    def test_capture_matches_real_precompact_payload(self):
+        fixture = json.loads(
+            (ROOT / "test" / "fixtures" / "precompact.json").read_text())
+        self.assertEqual(fixture["hook_event_name"], "PreCompact")
+        for key in ("session_id", "transcript_path", "cwd", "trigger"):
+            self.assertIn(key, fixture, "capture.sh reads this field")
+        fixture["transcript_path"] = self.transcript("a", "b", "c")
+        self.run_script("capture.sh", fixture, KEMORY_API_KEY="k")
+        self.assertEqual(len(Recorder.posts), 1)
+        body = Recorder.posts[0][1]
+        self.assertEqual(body["session_id"], fixture["session_id"])
+        self.assertEqual(body["metadata"]["capture_kind"], "flush")
+        self.assertEqual(body["metadata"]["end_reason"], "compact-manual")
+        self.assertIn("before compaction", body["content"])
+        self.assertIn(fixture["cwd"], body["content"])
+
+    def test_capture_precompact_never_blocks_compaction(self):
+        # Exit 2 or a decision: block on stdout would stop the /compact. Every
+        # path -- stored, opted out, API down, no transcript -- must be silent.
+        t = self.transcript("one turn")
+        cases = {
+            "stored": dict(),
+            "opted out": dict(KEMORY_AUTO_CAPTURE="0"),
+            "api down": dict(KEMORY_URL="http://127.0.0.1:1"),
+            "no credential": dict(KEMORY_API_KEY=""),
+        }
+        for name, env in cases.items():
+            with self.subTest(case=name):
+                r = self.precompact(t, session=f"s-{name}", **env)
+                self.assertEqual(r.returncode, 0)
+                self.assertEqual(r.stdout, "")
+        r = self.precompact("/nonexistent/transcript.jsonl", session="s-missing")
+        self.assertEqual((r.returncode, r.stdout), (0, ""))
+
+    def test_capture_precompact_flushes_below_threshold(self):
+        # Compaction summarises the context away; a turn short of the Stop
+        # threshold must be stored now, not left for a SessionEnd much later.
+        t = self.transcript("a single trailing turn")
+        self.stop(t)
+        self.assertEqual(Recorder.posts, [])
+        self.precompact(t, trigger="auto")
+        self.assertEqual(len(Recorder.posts), 1)
+        self.assertEqual(Recorder.posts[0][1]["metadata"]["end_reason"],
+                         "compact-auto")
+
+    def test_capture_precompact_then_session_end_does_not_duplicate(self):
+        t = self.transcript("one", "two")
+        self.precompact(t)
+        self.session_end(t)
         self.assertEqual(len(Recorder.posts), 1)
 
     def test_capture_stop_waits_for_enough_new_turns(self):
@@ -1726,6 +1793,30 @@ class McpEntryTest(unittest.TestCase):
         self.assertIsNone(first[0].get("Mcp-Session-Id"),
                           "nothing to send before the server has issued one")
         self.assertEqual(second[0].get("Mcp-Session-Id"), "sess-abc")
+
+    def test_prompts_resources_and_completion_are_relayed_unchanged(self):
+        # MCP prompts become slash commands and resource templates become @
+        # mentions, but only if the bridge passes these methods through. It
+        # must not filter, rewrite or answer any of them itself.
+        requests = [
+            {"jsonrpc": "2.0", "id": 1, "method": "prompts/list", "params": {}},
+            {"jsonrpc": "2.0", "id": 2, "method": "prompts/get",
+             "params": {"name": "enhance", "arguments": {"request": "x"}}},
+            {"jsonrpc": "2.0", "id": 3, "method": "resources/list", "params": {}},
+            {"jsonrpc": "2.0", "id": 4, "method": "resources/templates/list",
+             "params": {}},
+            {"jsonrpc": "2.0", "id": 5, "method": "resources/read",
+             "params": {"uri": "kemory://memory/abc"}},
+            {"jsonrpc": "2.0", "id": 6, "method": "completion/complete",
+             "params": {"ref": {"type": "ref/prompt", "name": "enhance"},
+                        "argument": {"name": "request", "value": "x"}}},
+        ]
+        r = self.run_mcp([json.dumps(q) for q in requests], KEMORY_API_KEY="k")
+        self.assertEqual([body for _, body, _ in McpRecorder.requests], requests)
+        replies = [json.loads(l) for l in r.stdout.strip().splitlines()]
+        self.assertEqual([x["id"] for x in replies], [1, 2, 3, 4, 5, 6])
+        for reply in replies:
+            self.assertEqual(reply["result"], McpRecorder.result)
 
     def test_stateless_server_gets_no_session_header(self):
         r = self.run_mcp([self.REQ, self.REQ], KEMORY_API_KEY="k")
