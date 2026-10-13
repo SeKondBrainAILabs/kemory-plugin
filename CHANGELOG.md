@@ -3,6 +3,14 @@
 All notable changes to this project are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.15.4] — 2026-10-13
+
+### Notes
+- The README says where the memory cards come from. The card Claude shows
+  after a save or recall comes from the Kemory server over MCP and needs
+  neither plugin; kemory-panel draws its own card only in the Claude Code
+  terminal.
+
 ## [0.15.3] — 2026-10-13
 
 ### Fixed
