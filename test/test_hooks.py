@@ -3188,6 +3188,20 @@ class ConnectorStatusTest(unittest.TestCase):
         yield {"claudeAiMcpEverConnected": "claude.ai Kemory"}
         yield {"claudeAiMcpEverConnected": {"claude.ai Kemory": True}}
 
+    def test_status_skips_the_connector_under_grok(self):
+        # ~/.claude.json exists wherever Claude Code does, but a claude.ai
+        # connector never runs in a Grok session: naming it, and /mcp, is wrong.
+        self.write_config({"claudeAiMcpEverConnected": ["claude.ai Kemory by SeKondBrain"]})
+        grok = str(pathlib.Path(self.home) / ".grok" / "installed-plugins" / "k" / "plugin")
+        out = self.status(CLAUDE_PLUGIN_ROOT=grok).stdout
+        self.assertNotIn("claude.ai Kemory", out)
+        self.assertNotIn("under /mcp", out)
+
+    def test_status_still_names_the_connector_under_claude_code(self):
+        self.write_config({"claudeAiMcpEverConnected": ["claude.ai Kemory by SeKondBrain"]})
+        out = self.status(CLAUDE_PLUGIN_ROOT=str(ROOT / "plugin")).stdout
+        self.assertIn("claude.ai Kemory by SeKondBrain", out)
+
     def test_status_names_a_connector_that_has_connected(self):
         self.write_config({"claudeAiMcpEverConnected":
                            ["claude.ai Gmail", self.CONNECTOR]})
