@@ -278,9 +278,11 @@ if [ "${others:-0}" -gt 0 ] && [ -z "$duplicate" ]; then
   info "if one of them is meant to be this Kemory, keep a single server"
 fi
 # The claude.ai connector is a Claude-only concept, read from ~/.claude.json.
-# Under another host that file does not exist, and reporting that we could not
-# read it is noise about a product the user may not be running.
-if [ -f "$HOME/.claude.json" ]; then
+# Skipped when that file is absent (no Claude Code here, so reporting that we
+# could not read it is noise), and skipped under Grok even when it is present:
+# it exists on any machine that also has Claude Code, but a claude.ai connector
+# never runs in a Grok session, so "two Kemory servers" and "/mcp" would be wrong.
+if [ -f "$HOME/.claude.json" ] && ! kemory_is_grok; then
 connector=$(kemory_connector_ever_connected)
 case "$connector" in
   seen*)
