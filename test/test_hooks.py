@@ -2830,6 +2830,164 @@ class SkippedServerTest(unittest.TestCase):
                          "the cache file was rewritten")
 
 
+class GrokDisabledServerTest(unittest.TestCase):
+    """Reporting that Grok Build has our MCP server switched off.
+
+    Grok keeps a top-level disabled_mcp_servers list in ~/.grok/config.toml and
+    never launches a server named there. Its MCP Servers tab cannot delete a
+    server a plugin provides, so disabling is the action it offers, and then
+    nothing says so: the hooks keep running and the kemory_* tools are simply
+    absent. This is the Grok twin of SkippedServerTest, and follows its rule:
+    every test that asserts we speak up has a twin asserting we stay quiet.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.srv = http.server.HTTPServer(("127.0.0.1", 0), Recorder)
+        cls.port = cls.srv.server_address[1]
+        threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.srv.shutdown()
+
+    def setUp(self):
+        reset_recorder()
+        self.home = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.home, ignore_errors=True)
+        self.mine = f"http://127.0.0.1:{self.port}"
+        self.config = pathlib.Path(self.home) / ".grok" / "config.toml"
+        self.config.parent.mkdir(parents=True, exist_ok=True)
+        # Where Grok installs a plugin. Only the path shape matters: it is how
+        # the plugin knows it is running under Grok.
+        self.grok_root = str(pathlib.Path(self.home) / ".grok" / "installed-plugins"
+                             / "kemory-plugin-git" / "plugin")
+
+    def env(self, plugin_root=None, **extra):
+        e = {k: v for k, v in os.environ.items() if not k.startswith("KEMORY_")}
+        e.update({"HOME": self.home, "CLAUDE_PROJECT_DIR": self.home,
+                  "KEMORY_URL": self.mine, "KEMORY_API_KEY": "k",
+                  "KEMORY_CONTEXT_TIMEOUT": "2",
+                  # Keep the one-time capture-default notice out of the
+                  # systemMessage slot, as SkippedServerTest does.
+                  "KEMORY_AUTO_CAPTURE": "1",
+                  "CLAUDE_PLUGIN_ROOT": plugin_root or self.grok_root})
+        e.pop("XDG_CACHE_HOME", None)
+        e.update(extra)
+        return e
+
+    def disable(self, *names):
+        listed = ", ".join(f'"{n}"' for n in names)
+        self.config.write_text(f"disabled_mcp_servers = [{listed}]\n\n[cli]\ninstaller = \"internal\"\n")
+
+    def status(self, **kw):
+        return subprocess.run([str(SCRIPTS / "status.sh")], input="{}",
+                              text=True, capture_output=True, env=self.env(**kw))
+
+    def session_start(self, **kw):
+        r = subprocess.run([str(SCRIPTS / "session-start.sh")],
+                           input=json.dumps({"source": "startup"}),
+                           text=True, capture_output=True, env=self.env(**kw))
+        try:
+            return json.loads(r.stdout).get("systemMessage", "")
+        except Exception:
+            return ""
+
+    # --- speaks up ----------------------------------------------------------
+
+    def test_status_reports_a_disabled_server(self):
+        self.disable("kemory")
+        out = self.status().stdout
+        self.assertIn("switched off", out)
+        self.assertIn("disabled_mcp_servers", out)
+        self.assertIn("~/.grok/config.toml", out)
+
+    def test_status_does_not_tick_a_server_grok_will_not_start(self):
+        # Same rule as a cached skip: no "will start" beside a host that is
+        # not going to start it.
+        self.disable("kemory")
+        out = self.status().stdout
+        self.assertIn("would start", out)
+        self.assertNotIn("will start", out)
+
+    def test_status_reports_a_namespaced_entry(self):
+        self.disable("plugin:kemory:kemory")
+        self.assertIn("plugin:kemory:kemory", self.status().stdout)
+
+    def test_session_start_warns_the_agent(self):
+        self.disable("kemory")
+        msg = self.session_start()
+        self.assertIn("switched off", msg)
+        self.assertIn("hooks are unaffected", msg)
+
+    # --- stays quiet --------------------------------------------------------
+
+    def test_status_is_quiet_without_a_grok_config(self):
+        out = self.status().stdout
+        self.assertNotIn("disabled_mcp_servers", out)
+        self.assertIn("will start", out)
+
+    def test_status_is_quiet_when_kemory_is_not_listed(self):
+        self.disable("serena", "notion-mcp")
+        self.assertNotIn("disabled_mcp_servers", self.status().stdout)
+
+    def test_status_ignores_a_similarly_named_server(self):
+        # A user's own deliberately disabled "kemory-staging" is not ours.
+        self.disable("kemory-staging")
+        self.assertNotIn("disabled_mcp_servers", self.status().stdout)
+
+    def test_status_is_quiet_under_another_host(self):
+        # A Grok config on this machine says nothing about a session running
+        # in a different host.
+        self.disable("kemory")
+        out = self.status(plugin_root=str(ROOT / "plugin")).stdout
+        self.assertNotIn("disabled_mcp_servers", out)
+
+    def test_status_is_quiet_on_a_config_it_cannot_parse(self):
+        self.config.write_text('disabled_mcp_servers = ["kemory"\n[[[not toml')
+        r = self.status()
+        self.assertEqual(r.returncode, 0)
+        self.assertNotIn("Traceback", r.stdout + r.stderr)
+        self.assertNotIn("disabled_mcp_servers", r.stdout)
+
+    def test_ignores_the_same_key_inside_a_table(self):
+        # [cli] disabled_mcp_servers is cli.disabled_mcp_servers, a different
+        # key. Grok would not act on it, so neither should we.
+        self.config.write_text('[cli]\ndisabled_mcp_servers = ["kemory"]\n')
+        self.assertNotIn("disabled_mcp_servers", self.status().stdout)
+
+    # --- the pre-3.11 fallback, which has no tomllib -------------------------
+    # CI runs a Python with tomllib, so without these the regex path would ship
+    # untested. A tomllib.py that refuses to import shadows the real one.
+
+    def no_tomllib(self):
+        d = pathlib.Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        (d / "tomllib.py").write_text('raise ImportError("simulated pre-3.11")\n')
+        return str(d)
+
+    def test_fallback_reports_a_top_level_entry(self):
+        self.disable("kemory")
+        self.assertIn("switched off", self.status(PYTHONPATH=self.no_tomllib()).stdout)
+
+    def test_fallback_ignores_the_same_key_inside_a_table(self):
+        self.config.write_text('[cli]\ndisabled_mcp_servers = ["kemory"]\n')
+        out = self.status(PYTHONPATH=self.no_tomllib()).stdout
+        self.assertNotIn("disabled_mcp_servers", out)
+
+    def test_fallback_reads_a_list_split_across_lines(self):
+        self.config.write_text('disabled_mcp_servers = [\n  "serena",\n  "kemory",\n]\n\n[cli]\nx = 1\n')
+        self.assertIn("switched off", self.status(PYTHONPATH=self.no_tomllib()).stdout)
+
+    def test_session_start_warns_once_a_day_not_every_session(self):
+        # Durable config the user may have set on purpose: say it once, then
+        # leave the agent alone. /kemory:status still reports it every time.
+        self.disable("kemory")
+        self.assertIn("switched off", self.session_start())
+        self.assertNotIn("switched off", self.session_start())
+        self.assertIn("switched off", self.status().stdout)
+
+
 class ConnectorStatusTest(unittest.TestCase):
     """/kemory:status on a machine where a claude.ai connector has connected.
 

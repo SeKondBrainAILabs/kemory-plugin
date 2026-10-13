@@ -110,8 +110,9 @@ hold your sign-in tokens.
   to avoid storing or asking twice.
 - `~/.kemory/.recalled/` holds, per session, 16-character fingerprints of the
   memories already injected, so the same memory is not injected twice.
-- `~/.kemory/.setup-hint`, `~/.kemory/.paste-hint` and `~/.kemory/.version-hint`
-  are empty files. Their modification time throttles a one-off notice.
+- `~/.kemory/.setup-hint`, `~/.kemory/.paste-hint`, `~/.kemory/.version-hint`
+  and `~/.kemory/.grok-disabled-hint` are empty files. Their modification time
+  throttles a one-off notice.
 - `~/.kemory/.capture-default` is an empty marker, so the capture notice is
   shown once.
 - `~/.kemory/credentials-<env>` and `~/.kemory/credentials` are the credential
@@ -126,6 +127,11 @@ At session start the plugin also **reads** `~/.claude/CLAUDE.md` and a
 `CLAUDE.md` in the current directory, looking only for a hand-pasted copy of
 the Kemory instruction so it can tell you the plugin now ships one. The file
 contents are never sent anywhere, never stored, and never edited.
+
+Under Grok Build it also **reads** `~/.grok/config.toml`, looking only at the
+`disabled_mcp_servers` list, so it can tell you when Grok has switched the
+Kemory server off. The file is never sent anywhere, never stored, and never
+edited.
 
 ## Contact
 
