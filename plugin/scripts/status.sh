@@ -74,6 +74,18 @@ if [ -n "${KEMORY_BASE_URL:-}" ] && command -v curl >/dev/null 2>&1; then
               info "or set KEMORY_URL to your instance's API host" ;;
     *)        bad "API returned HTTP $code" ;;
   esac
+  # Name the organisation the hooks and tools act in. A wrong one is otherwise
+  # invisible: a fresh sign-in can land in the account's home organisation and
+  # every capture goes there without a word.
+  if [ "$code" = 200 ]; then
+    org="$(kemory_active_org)"
+    if [ -n "$org" ]; then
+      org_name="${org%%$'\t'*}"
+      org_id="${org#*$'\t'}"
+      info "organisation: $org_name${org_id:+ ($org_id)}"
+      info "to use another one: 'kemory use <org-id>' with the Kemory CLI"
+    fi
+  fi
 fi
 
 # --- MCP tools -------------------------------------------------------------

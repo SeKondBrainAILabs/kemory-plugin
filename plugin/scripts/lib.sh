@@ -233,6 +233,47 @@ if expired:
   return 0
 }
 
+# Which organisation the credential acts in, BY NAME: echoes "<name>\t<id>".
+#
+# The id alone is a UUID nobody reads, and the name only exists server-side, so
+# ask the server the way an MCP client would (kemory_whoami, which returns
+# org_name in structuredContent). This is what makes a wrong active
+# organisation visible: until it was shown, a fresh sign-in could put a user in
+# their account's home organisation and every capture went there unnoticed.
+#
+# Needs kemory_resolve_auth to have run. Silent on any failure — no network, an
+# older server, a reply without a name — because a missing name must never stop
+# status or sign-in.
+kemory_active_org() {
+  [ -n "${KEMORY_BASE_URL:-}" ] && [ -n "${KEMORY_AUTH_HEADER:-}" ] || return 0
+  command -v curl >/dev/null 2>&1 || return 0
+  command -v python3 >/dev/null 2>&1 || return 0
+  local args=(-s --max-time "${KEMORY_ORG_TIMEOUT:-5}"
+              -H "Content-Type: application/json"
+              -H "Accept: application/json, text/event-stream"
+              -H "$KEMORY_AUTH_HEADER")
+  [ -n "${KEMORY_ORG_HEADER:-}" ] && args+=(-H "$KEMORY_ORG_HEADER")
+  curl "${args[@]}" -X POST "$KEMORY_BASE_URL/mcp/v1" \
+    -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"kemory_whoami","arguments":{}}}' \
+    2>/dev/null | python3 -c '
+import json, sys
+raw = sys.stdin.read().strip()
+try:
+    data = json.loads(raw)
+except ValueError:
+    # An SSE reply: the last data line carries the result.
+    lines = [l[5:].strip() for l in raw.splitlines() if l.startswith("data:")]
+    try:
+        data = json.loads(lines[-1])
+    except Exception:
+        raise SystemExit(0)
+sc = ((data.get("result") or {}).get("structuredContent") or {}) if isinstance(data, dict) else {}
+name, org = sc.get("org_name"), sc.get("org_id")
+if isinstance(name, str) and name.strip():
+    print(name.strip() + "\t" + str(org or ""))
+' 2>/dev/null
+}
+
 # Locate a Kemory API key sitting in an MCP client config, where our own docs
 # tell Claude Code users to put it.
 #
