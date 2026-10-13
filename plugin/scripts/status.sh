@@ -177,6 +177,10 @@ if [ -n "${KEMORY_BASE_URL:-}" ]; then
   else
     bad "credential found, but neither the kemory CLI nor python3 is available"
   fi
+elif kemory_is_grok; then
+  bad "no credential — the bundled server starts signed out (same one the hooks need)"
+  info "its tools answer 'run /kemory:login' until you sign in, and work on the"
+  info "next call after it — no restart needed"
 else
   bad "bundled server will not start — no credential (same one the hooks need)"
   info "it exits with that reason rather than appearing connected with no tools"

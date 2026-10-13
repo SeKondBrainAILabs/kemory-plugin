@@ -21,11 +21,22 @@ working rather than to silence.
 
 Every failure answers in-band as a JSON-RPC error. A bridge that dies on a bad
 response leaves the host waiting on a request that can never complete.
+
+SIGNED OUT. Under Grok, mcp.sh starts this bridge with no credential rather
+than exiting (see mcp.sh for why). The API answers `initialize` and
+`tools/list` without one, so the host still gets every tool. When a reply says
+a credential is needed — HTTP 401/403, or the API's own 200 carrying
+`isError` and `_meta["mcp/www_authenticate"]` — the bridge asks lib.sh for the
+credential again and retries once. That is how a /kemory:login in the middle
+of a session takes effect with no restart, and how an expired token gets
+lib.sh's refresh. With still no credential, a tool call answers with the one
+action that fixes it.
 """
 from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 import urllib.error
 import urllib.request
@@ -41,24 +52,59 @@ INTERNAL_ERROR = -32603
 _session_id: str | None = None
 
 
+# The credential in use, starting from what mcp.sh resolved. Empty when mcp.sh
+# started us signed out. Replaced by _resolve() when a reply says it is needed.
+_base_url: str = (os.environ.get("KEMORY_BASE_URL") or "").rstrip("/")
+_auth_header: str = os.environ.get("KEMORY_AUTH_HEADER") or ""
+
+LIB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib.sh")
+
+SIGNED_OUT = ("Kemory: not signed in. Run /kemory:login, approve in the browser, "
+              "then call this tool again. No restart is needed.")
+
+
 def _endpoint() -> str:
-    base = (os.environ.get("KEMORY_BASE_URL") or "").rstrip("/")
-    if not base:
+    if not _base_url:
         raise SystemExit("kemory: KEMORY_BASE_URL is empty — mcp.sh must set it")
-    return base + "/mcp/v1"
+    return _base_url + "/mcp/v1"
 
 
 def _headers() -> dict[str, str]:
-    header = os.environ.get("KEMORY_AUTH_HEADER") or ""
-    name, _, value = header.partition(":")
-    if not (name and value.strip()):
-        raise SystemExit("kemory: KEMORY_AUTH_HEADER is empty — mcp.sh must set it")
-    return {
-        name.strip(): value.strip(),
+    headers = {
         "Content-Type": "application/json",
         # Both, so a server that prefers SSE still has a shape to choose.
         "Accept": "application/json, text/event-stream",
     }
+    name, _, value = _auth_header.partition(":")
+    if name and value.strip():
+        headers[name.strip()] = value.strip()
+    return headers
+
+
+def _resolve() -> tuple[str, str] | None:
+    """Ask lib.sh for the credential now: the same resolution, refresh included,
+    that mcp.sh and the hooks use. None when there is no usable one."""
+    script = ('. "$1" >/dev/null 2>&1 || exit 1; '
+              'kemory_resolve_auth >/dev/null 2>&1 || exit 1; '
+              '[ "${KEMORY_TOKEN_EXPIRED:-0}" = "1" ] && exit 1; '
+              'printf "%s\n%s\n" "$KEMORY_BASE_URL" "$KEMORY_AUTH_HEADER"')
+    try:
+        r = subprocess.run(["bash", "-c", script, "_", LIB],
+                           capture_output=True, text=True, timeout=30)
+    except Exception:  # noqa: BLE001 — no credential is an answer, not a crash
+        return None
+    lines = r.stdout.splitlines()
+    if r.returncode != 0 or len(lines) < 2 or not lines[0] or not lines[1]:
+        return None
+    return lines[0].rstrip("/"), lines[1]
+
+
+def _needs_auth(reply: dict | None, status: int) -> bool:
+    if status in (401, 403):
+        return True
+    result = reply.get("result") if isinstance(reply, dict) else None
+    return (isinstance(result, dict) and bool(result.get("isError"))
+            and "mcp/www_authenticate" in (result.get("_meta") or {}))
 
 
 def _parse(raw: bytes, content_type: str) -> dict | None:
@@ -88,8 +134,8 @@ def _error(request_id, message: str) -> dict:
     }
 
 
-def _relay(endpoint: str, headers: dict[str, str], request: dict) -> dict | None:
-    """POST one message. Returns the reply, or None when none is due."""
+def _relay(endpoint: str, headers: dict[str, str], request: dict) -> tuple[dict | None, int]:
+    """POST one message. Returns (reply or None when none is due, HTTP status)."""
     global _session_id
 
     # A JSON-RPC notification has no `id` and takes no response. Answering one
@@ -117,34 +163,59 @@ def _relay(endpoint: str, headers: dict[str, str], request: dict) -> dict | None
         if exc.code == 404 and _session_id:
             _session_id = None
         if is_notification:
-            return None
+            return None, exc.code
         detail = exc.read().decode("utf-8", "replace")[:200].strip()
         hint = ""
         if exc.code in (401, 403):
             hint = " — credential rejected; re-run 'kemory login' or check KEMORY_API_KEY"
-        return _error(request_id, f"kemory API HTTP {exc.code}{hint}: {detail}")
+        return _error(request_id, f"kemory API HTTP {exc.code}{hint}: {detail}"), exc.code
     except Exception as exc:  # noqa: BLE001 — every transport fault answers in-band
         if is_notification:
-            return None
-        return _error(request_id, f"kemory API unreachable: {exc.__class__.__name__}: {exc}")
+            return None, 0
+        return _error(request_id, f"kemory API unreachable: {exc.__class__.__name__}: {exc}"), 0
 
     if is_notification:
-        return None
+        return None, status
     # 202 Accepted is the transport's "received, nothing to return".
     if status == 202:
-        return None
+        return None, status
     try:
         parsed = _parse(raw, content_type)
     except ValueError as exc:
-        return _error(request_id, f"kemory API sent a non-JSON reply: {exc}")
+        return _error(request_id, f"kemory API sent a non-JSON reply: {exc}"), status
     if parsed is None:
-        return _error(request_id, "kemory API sent an empty reply")
-    return parsed
+        return _error(request_id, "kemory API sent an empty reply"), status
+    return parsed, status
+
+
+def _answer(request: dict) -> dict | None:
+    """Relay one message; when it needs a credential, look again and retry once."""
+    global _base_url, _auth_header
+    reply, status = _relay(_endpoint(), _headers(), request)
+    if not _needs_auth(reply, status):
+        return reply
+    fresh = _resolve()
+    if fresh and fresh[1] != _auth_header:
+        _base_url, _auth_header = fresh
+        reply, status = _relay(_endpoint(), _headers(), request)
+        if not _needs_auth(reply, status):
+            return reply
+    if fresh:
+        # There is a credential and the API still refused it: the reply already
+        # says so, in the server's words or the 401 hint above.
+        return reply
+    # No credential at all. A tool call answers as a tool error, which the
+    # model reads; anything else as a JSON-RPC error.
+    request_id = request.get("id")
+    if request.get("method") == "tools/call":
+        return {"jsonrpc": "2.0", "id": request_id,
+                "result": {"content": [{"type": "text", "text": SIGNED_OUT}],
+                           "isError": True}}
+    return _error(request_id, SIGNED_OUT)
 
 
 def main() -> None:
-    endpoint = _endpoint()
-    headers = _headers()
+    _endpoint()  # fail at start, not on the first request, if mcp.sh set no URL
 
     for line in sys.stdin:
         line = line.strip()
@@ -160,12 +231,12 @@ def main() -> None:
             continue
         # A batch is a list; relay each member and answer with the replies due.
         if isinstance(request, list):
-            replies = [r for r in (_relay(endpoint, headers, m) for m in request) if r]
+            replies = [r for r in (_answer(m) for m in request) if r]
             if replies:
                 sys.stdout.write(json.dumps(replies) + "\n")
                 sys.stdout.flush()
             continue
-        reply = _relay(endpoint, headers, request)
+        reply = _answer(request)
         if reply is not None:
             sys.stdout.write(json.dumps(reply) + "\n")
             sys.stdout.flush()

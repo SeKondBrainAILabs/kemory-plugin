@@ -97,6 +97,17 @@ def discover(base_url: str) -> str:
     return issuer
 
 
+def under_grok() -> bool:
+    """Same test as lib.sh's kemory_is_grok: installed under ~/.grok, or told so.
+
+    Grok Build does not export CLAUDE_PLUGIN_ROOT to the shell, so the
+    script's own location is the reliable signal.
+    """
+    here = os.path.realpath(__file__)
+    root = os.environ.get("CLAUDE_PLUGIN_ROOT", "")
+    return "/.grok/" in here or "/.grok/" in root
+
+
 def claims_of(access_token: str) -> dict:
     """The access token's own claims. `email` and `org_id` live here, so the
     credential file can be filled with no extra API call."""
@@ -229,7 +240,12 @@ def main() -> None:
             claims = claims_of(body["access_token"])
             who = claims.get("email") or claims.get("preferred_username") or "signed in"
             print(f"\nSigned in as {who}. Credential written to {path}.")
-            print("Restart your session to pick it up — the hooks and the memory tools both read this file.")
+            if under_grok():
+                # Under Grok the bundled server started signed out and reads
+                # this file when a call needs it (mcp.sh, mcp_bridge.py).
+                print("The memory tools and prompt recall pick it up on their next use — no restart needed.")
+            else:
+                print("Restart your session to pick it up — the hooks and the memory tools both read this file.")
             return
         error = body.get("error")
         if error == "authorization_pending":

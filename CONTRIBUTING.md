@@ -12,7 +12,10 @@ Thanks for helping improve the Kemory plugin. By taking part you agree to the
   user has no credentials, nothing should error. One deliberate exception:
   `scripts/mcp.sh` exits non-zero with a reason when it finds no credential.
   A silent no-op there produces an MCP server that looks connected and serves
-  no tools, which hides a misconfiguration instead of reporting it.
+  no tools, which hides a misconfiguration instead of reporting it. Under Grok
+  Build it starts signed out instead: every tool is listed and each call names
+  `/kemory:login`, so nothing is hidden and no restart is needed after signing
+  in.
 - Anything that sends data anywhere must be **opt-in and documented**. Two
   exceptions are on by default: session capture (`capture.sh`,
   `KEMORY_AUTO_CAPTURE=0` turns it off) and prompt recall (`prompt-recall.sh`,

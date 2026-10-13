@@ -13,6 +13,21 @@
 # community instance, so the common case needs a key and nothing else.
 KEMORY_DEFAULT_URL="${KEMORY_DEFAULT_URL:-https://api.kemory.s9n.ai}"
 
+# Where this plugin is installed. Hosts substitute ${CLAUDE_PLUGIN_ROOT} into the
+# commands they run, but Grok Build does not export it to the shell (measured on
+# Grok 1.0.52: unset inside a command's shell call), so a script that branches
+# on the variable alone mistakes Grok for some other host. Its own location is
+# the fact that does not depend on the host.
+KEMORY_PLUGIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd)"
+
+# True when this plugin is running under Grok Build: installed under ~/.grok, or
+# told so by a host that does export CLAUDE_PLUGIN_ROOT.
+kemory_is_grok() {
+  case "${CLAUDE_PLUGIN_ROOT:-}" in */.grok/*) return 0 ;; esac
+  case "${KEMORY_PLUGIN_DIR:-}" in */.grok/*) return 0 ;; esac
+  return 1
+}
+
 # Where capture writes digests unless KEMORY_CAPTURE_NAMESPACE says otherwise;
 # capture.sh and status.sh both read it.
 # shellcheck disable=SC2034  # read by the scripts that source this file
@@ -37,9 +52,10 @@ KEMORY_DEFAULT_CAPTURE_NAMESPACE="user:sessions"
 # Grok Build has neither: it installs under ~/.grok and updates from its own
 # CLI, so naming a Claude command there is advice the person cannot run.
 kemory_update_command() {
-  case "${CLAUDE_PLUGIN_ROOT:-}" in
-    */.grok/*) printf '%s' "'grok plugin update kemory' in a terminal"; return ;;
-  esac
+  if kemory_is_grok; then
+    printf '%s' "'grok plugin update kemory' in a terminal"
+    return
+  fi
   if [ "${CLAUDE_CODE_ENTRYPOINT:-}" = "claude-desktop" ]; then
     printf '%s' "'claude plugin update kemory@kemory' in a terminal"
   else
@@ -576,7 +592,7 @@ PY
 # Echoes the matching entry; silent otherwise, including when the config is
 # absent, unreadable or not valid TOML.
 kemory_grok_disabled_server() {
-  case "${CLAUDE_PLUGIN_ROOT:-}" in */.grok/*) ;; *) return 0 ;; esac
+  kemory_is_grok || return 0
   command -v python3 >/dev/null 2>&1 || return 0
   python3 - <<'PY' 2>/dev/null
 import os, re

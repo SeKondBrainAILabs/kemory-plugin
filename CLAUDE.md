@@ -53,7 +53,11 @@ Hooks:
   is discarded, so context injection would die silently. Only `capture.sh` runs async
   (`plugin/hooks/hooks.json` description).
 - Hooks fail open and exit 0 on every error path. `mcp.sh` is the one deliberate
-  exception: it exits non-zero when there is no credential (`CONTRIBUTING.md`).
+  exception: it exits non-zero when there is no credential (`CONTRIBUTING.md`),
+  except under Grok Build, where it starts the bridge signed out.
+- Detect Grok with `kemory_is_grok` (`lib.sh`), never `CLAUDE_PLUGIN_ROOT` alone.
+  Grok substitutes `${CLAUDE_PLUGIN_ROOT}` into command text but does not export
+  it to the shell, so the variable is unset inside `/kemory:status`.
 - A `python3 <<'PY'` heredoc becomes the program's stdin. Read the hook payload into a
   variable first and pass it in an environment variable, as `store-nudge.sh:22-23` does
   with `HOOK_INPUT`. Never read `sys.stdin` inside the heredoc.

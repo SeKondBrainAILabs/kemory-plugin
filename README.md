@@ -114,9 +114,10 @@ pick up a new plugin's commands in a running session. Then sign in:
 /kemory:login
 ```
 
-Approve in the browser, then restart Grok so the memory tools start with the
-new credential. `/kemory:status` confirms it, and if the `kemory_*` tools are
-missing it says why.
+Approve in the browser. There is no restart: under Grok the memory server
+starts signed out, every `kemory_*` tool answers "run `/kemory:login`" until
+you sign in, and the next call after signing in goes through.
+`/kemory:status` confirms it, and if the tools are missing it says why.
 
 Grok's MCP Servers tab cannot delete a server that a plugin provides. If the
 Kemory server ends up disabled there, it is listed in `disabled_mcp_servers` in
