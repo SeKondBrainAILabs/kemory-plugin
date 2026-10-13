@@ -12,8 +12,8 @@ to the identity provider that instance names. It sends no telemetry and no
 analytics. Its update notice reads the marketplace copy already on your disk
 and does not contact the network. These are all of its calls:
 
-- **Hooks.** The `SessionStart`, `UserPromptSubmit` and `Stop`/`SessionEnd`
-  hooks call your Kemory instance, as the table below shows.
+- **Hooks.** The `SessionStart`, `UserPromptSubmit` and
+  `Stop`/`PreCompact`/`SessionEnd` hooks call your Kemory instance, as the table below shows.
 - **Memory tools.** The bundled MCP server sends the arguments of every Kemory
   memory tool Claude calls to the same instance, for example the text of a
   memory being stored or a recall query.
@@ -33,7 +33,7 @@ and does not contact the network. These are all of its calls:
 | prompt recall | `UserPromptSubmit` | **The text of your prompt**, as a search query | on |
 | rate reminder | `PostToolUse` | Nothing — runs entirely locally | on |
 | store nudge | `Stop` | Nothing — reads the transcript on your machine and prints guidance | **off** |
-| session capture | `Stop`, `SessionEnd` | Your own prompts: last 12 turns, 8000 characters max, redacted, stored `user-private` in `user:sessions` | on |
+| session capture | `Stop`, `PreCompact`, `SessionEnd` | Your own prompts: last 12 turns, 8000 characters max, redacted, stored `user-private` in `user:sessions` | on |
 
 The optional `kemory-panel` plugin is separate and is not covered by this
 table. It calls Kemory through this plugin's server when you save, rate or

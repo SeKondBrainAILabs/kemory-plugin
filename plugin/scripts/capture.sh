@@ -1,11 +1,16 @@
 #!/usr/bin/env bash
-# Stop + SessionEnd hook — capture the session into Kemory as episodic memories
+# Stop + PreCompact + SessionEnd hook — capture the session into Kemory as episodic memories
 # tagged with session_id, so the server-side Reflector can consolidate them into
 # a semantic summary later.
 #
 # Runs on Stop (after each assistant response) so a session that is killed,
-# crashes, or is never cleanly ended still leaves its work behind. SessionEnd
-# then flushes whatever is left.
+# crashes, or is never cleanly ended still leaves its work behind. PreCompact
+# flushes whatever is pending before /compact (manual or auto) summarises the
+# context away, and SessionEnd flushes whatever is left at the end.
+#
+# PreCompact can block compaction (exit 2, or "decision": "block" on stdout),
+# so this script must print nothing and exit 0 on every path, which it already
+# does for Stop and SessionEnd.
 #
 # Only NEW turns are posted. Kemory's community edition has no idempotency
 # support, so a client-side high-water mark is the only thing preventing the
@@ -79,16 +84,26 @@ if hook.get("stop_hook_active"):
     die()
 
 session_id = hook.get("session_id") or ""
-reason = hook.get("reason") or "unknown"
 event = hook.get("hook_event_name") or ""
+# SessionEnd carries `reason`; PreCompact carries `trigger` (manual | auto).
+reason = hook.get("reason") or (
+    f"compact-{hook['trigger']}" if event == "PreCompact" and hook.get("trigger")
+    else "unknown"
+)
 transcript = hook.get("transcript_path") or ""
 if not transcript or not os.path.isfile(transcript):
     die()
 
-# SessionEnd is the last chance to store anything, so it flushes whatever is
-# pending. Stop fires after every assistant response and waits for enough new
-# material to be worth a memory.
+# SessionEnd is the last chance to store anything, and PreCompact the last
+# chance before the context is summarised, so both flush whatever is pending.
+# Stop fires after every assistant response and waits for enough new material
+# to be worth a memory.
 flushing = event != "Stop"
+when = (
+    "mid-session" if not flushing
+    else "before compaction" if event == "PreCompact"
+    else "at session end"
+)
 
 # Only the user's own turns: they carry intent and goals, and skipping
 # assistant output keeps the digest small and avoids re-storing tool dumps.
@@ -160,7 +175,7 @@ window = (
 )
 content = (
     "What was this coding session about? Session digest captured automatically "
-    f"({'at session end' if flushing else 'mid-session'}, user turns only, "
+    f"({when}, user turns only, "
     f"secrets redacted, {window}).\n\ncwd: "
     f"{hook.get('cwd', 'unknown')}\n\n{body}"
 )

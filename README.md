@@ -28,7 +28,9 @@ turn on.
 - **Rate reminder** — the agent rates the memories it used, so retrieval keeps
   improving
 - **Session capture** — *on by default, `KEMORY_AUTO_CAPTURE=0` to opt out.*
-  A bounded, redacted digest of what the session was about, stored at the end
+  A bounded, redacted digest of what the session was about, stored as the
+  session goes, flushed before each `/compact` (manual or auto) and again at
+  the end. It sends the text of your own turns, not your files or tool output
 - **`/kemory:status`** — one command that says what is and is not working
 
 ## kemory and kemory-panel
@@ -190,7 +192,7 @@ the version you are on, and [CHANGELOG.md](CHANGELOG.md) says what moved.
 | rate reminder | `PostToolUse` | Prompts the agent to rate the memories it actually used | Nothing | on |
 | consolidate reminder | `SessionStart` after compaction | Prompts the agent to store facts that would otherwise survive only as a summary | Nothing | on |
 | store nudge | `Stop` | When the turn settled something durable and no Kemory write happened, asks for it before the turn ends | Nothing | **off** |
-| session capture | `Stop`, `SessionEnd` | Stores a redacted digest of your own prompts: last 12 turns, 8000 characters | Your prompts, redacted | on |
+| session capture | `Stop`, `PreCompact`, `SessionEnd` | Stores a redacted digest of your own prompts: last 12 turns, 8000 characters. `PreCompact` flushes it before compaction; the hook runs in the background and never blocks `/compact` | Your prompts, redacted | on |
 
 Auto-approval of read-only Kemory tools is in `kemory-panel`, not here.
 
@@ -210,6 +212,20 @@ semantic search finds them again, and a `kemory-setup` skill that walks the
 agent through connecting Kemory when something is not working.
 
 With no credential configured, every hook no-ops and nothing is sent.
+
+## Slash commands from the Kemory server
+
+The Kemory MCP server can offer MCP prompts, which Claude Code turns into slash
+commands. The server comes bundled with this plugin, so Claude Code lists them
+as `/plugin:kemory:kemory:<name> (MCP)`, and the typed form below also works.
+They appear only when your Kemory server offers them.
+
+- **`/mcp__plugin_kemory_kemory__enhance <request>`** returns your request with
+  the related memories cited by id. When nothing matches, the request comes
+  back unchanged.
+- **`/mcp__plugin_kemory_kemory__save-session`**: run it before `/compact` or
+  at the end of a session. It captures the decisions and durable facts from the
+  session, then consolidates them.
 
 ## Privacy Policy
 
