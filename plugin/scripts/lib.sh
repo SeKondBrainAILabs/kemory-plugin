@@ -4,6 +4,8 @@
 # Sets, on success (return 0):
 #   KEMORY_BASE_URL    — API base, no trailing slash
 #   KEMORY_AUTH_HEADER — a complete header line to send
+#   KEMORY_ORG_HEADER  — "X-Organization-ID: <id>" when `kemory use` selected an
+#                        organisation for the credential file's token, else empty
 #   KEMORY_URL_RETARGETED_FROM — set only when a superseded host was rewritten
 #
 # Hosted Kemory authenticates with a bearer token; the community edition
@@ -76,8 +78,8 @@ kemory_retarget_url() {
 }
 
 kemory_resolve_auth() {
-  local creds url token api_key
-  url="" ; token="" ; api_key=""
+  local creds url token api_key org
+  url="" ; token="" ; api_key="" ; org=""
   unset KEMORY_URL_RETARGETED_FROM KEMORY_CREDS_CORRUPT KEMORY_TOKEN_EXPIRED
 
   if [ -n "${KEMORY_API_KEY:-}" ]; then
@@ -200,7 +202,8 @@ if d.get("access_token") and isinstance(exp, (int, float)):
     if time.time() > float(exp) - 60 and not refresh(d):
         expired = True
 
-for var, key in (("url", "kemory_url"), ("token", "access_token"), ("api_key", "api_key")):
+for var, key in (("url", "kemory_url"), ("token", "access_token"), ("api_key", "api_key"),
+                 ("org", "active_org_id")):
     v = d.get(key) or ""
     if v:
         print(f"{var}={shlex.quote(str(v))}")
@@ -217,9 +220,16 @@ if expired:
   else
     return 1
   fi
+  # The organisation `kemory use` selected. The CLI, and so the MCP tools it
+  # serves, sends it on every request; without it the hooks would recall from
+  # and capture into the token's own organisation instead.
+  KEMORY_ORG_HEADER=""
+  if [ -z "$api_key" ] && [ -n "$org" ]; then
+    KEMORY_ORG_HEADER="X-Organization-ID: $org"
+  fi
   kemory_retarget_url "${url%/}"
   KEMORY_BASE_URL="$KEMORY_RETARGETED_URL"
-  export KEMORY_BASE_URL KEMORY_AUTH_HEADER KEMORY_URL_RETARGETED_FROM
+  export KEMORY_BASE_URL KEMORY_AUTH_HEADER KEMORY_ORG_HEADER KEMORY_URL_RETARGETED_FROM
   return 0
 }
 

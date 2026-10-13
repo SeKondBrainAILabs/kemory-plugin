@@ -58,8 +58,8 @@ fi
 if [ -n "$signed_out" ]; then
   kemory_retarget_url "${KEMORY_URL:-$KEMORY_DEFAULT_URL}"
   KEMORY_BASE_URL="${KEMORY_RETARGETED_URL%/}"
-  KEMORY_AUTH_HEADER=""
-  export KEMORY_BASE_URL KEMORY_AUTH_HEADER
+  KEMORY_AUTH_HEADER="" ; KEMORY_ORG_HEADER=""
+  export KEMORY_BASE_URL KEMORY_AUTH_HEADER KEMORY_ORG_HEADER
 fi
 
 # Stand down when this machine already has a server for the same Kemory. Two
