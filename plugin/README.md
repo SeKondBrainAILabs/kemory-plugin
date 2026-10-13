@@ -56,6 +56,13 @@ With no credential it exits with that reason on stderr rather than starting.
 A server that starts and exposes nothing reads as connected in `/mcp` while
 every memory tool is missing, which is worse than a visible failure.
 
+Under Grok Build it starts **signed out** instead. Grok fixes a server's tool
+list when a session starts and never asks again, so an exit there costs a
+restart after `/kemory:login`. A signed-out server does not expose nothing:
+the Kemory API lists its tools without a credential, each call answers
+"run `/kemory:login`" until there is one, and the bridge looks the credential
+up again when a call needs it, so the first call after signing in works.
+
 `KEMORY_URL` still repoints the whole plugin — the bridge takes its host from
 the same resolution.
 

@@ -17,23 +17,49 @@
 # Exits non-zero with one line on stderr when there is no credential. A server
 # that starts and exposes nothing looks connected in /mcp while every memory
 # tool is missing, which is the failure this whole change is about.
+#
+# Except under Grok Build, which starts the bundled bridge SIGNED OUT instead.
+# Grok fixes a server's tool list when the session starts and never asks again
+# (it ignores notifications/tools/list_changed — measured on Grok 1.0.52), so a
+# server that exits for want of a credential costs the user a restart after
+# /kemory:login. A signed-out bridge does not expose nothing: the Kemory API
+# lists its tools without a credential, so every tool is there from the start,
+# each call answers "run /kemory:login" until there is one, and the first call
+# after signing in goes through. Claude Code keeps the exit: there a user who
+# reaches Kemory through the claude.ai connector has no credential by design,
+# and a signed-out bundled server would sit beside the connector's tools.
 set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib.sh disable=SC1091
 . "$DIR/lib.sh"
 
+signed_out=""
 if ! kemory_resolve_auth; then
   if [ -n "${KEMORY_CREDS_CORRUPT:-}" ]; then
     echo "kemory: $KEMORY_CREDS_CORRUPT is not valid JSON and could not be recovered — run /kemory:login to write a fresh one." >&2
-    exit 1
+    kemory_is_grok || exit 1
+  else
+    if kemory_is_grok; then
+      echo "kemory: no credential — starting signed out. The memory tools answer 'run /kemory:login' until you sign in, and work on the next call after; no restart needed. (Or set KEMORY_API_KEY for a headless machine.)" >&2
+    else
+      echo "kemory: no credential — run /kemory:login to sign in with your browser (or set KEMORY_API_KEY for a headless machine). Using the claude.ai connector instead? Disable this server under /mcp." >&2
+      exit 1
+    fi
   fi
-  echo "kemory: no credential — run /kemory:login to sign in with your browser (or set KEMORY_API_KEY for a headless machine). Using the claude.ai connector instead? Disable this server under /mcp." >&2
-  exit 1
+  signed_out=1
+elif [ "${KEMORY_TOKEN_EXPIRED:-0}" = "1" ]; then
+  echo "kemory: stored token expired and could not be refreshed — run /kemory:login to sign in again." >&2
+  kemory_is_grok || exit 1
+  signed_out=1
 fi
 
-if [ "${KEMORY_TOKEN_EXPIRED:-0}" = "1" ]; then
-  echo "kemory: stored token expired and could not be refreshed — run /kemory:login to sign in again." >&2
-  exit 1
+# Signed out (Grok only, by the branches above): point the bridge at the API
+# with no credential. It resolves one through lib.sh when a call needs it.
+if [ -n "$signed_out" ]; then
+  kemory_retarget_url "${KEMORY_URL:-$KEMORY_DEFAULT_URL}"
+  KEMORY_BASE_URL="${KEMORY_RETARGETED_URL%/}"
+  KEMORY_AUTH_HEADER=""
+  export KEMORY_BASE_URL KEMORY_AUTH_HEADER
 fi
 
 # Stand down when this machine already has a server for the same Kemory. Two
@@ -53,6 +79,16 @@ if [ "${KEMORY_ALLOW_DUPLICATE:-0}" != "1" ]; then
     echo "kemory: standing down — '$name' in $where already serves this same Kemory, and two servers mean two copies of every tool. Your hooks are unaffected. Keep this one instead? Remove that entry (or run 'claude mcp remove $name'), then restart. Want both anyway? Set KEMORY_ALLOW_DUPLICATE=1." >&2
     exit 1
   fi
+fi
+
+# Signed out, the bundled bridge is the only server that can pick a credential
+# up mid-session: the CLI's own bridge reads it once, at launch.
+if [ -n "$signed_out" ]; then
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "kemory: need python3 to serve the memory tools." >&2
+    exit 1
+  fi
+  exec python3 "$DIR/mcp_bridge.py"
 fi
 
 # Which credential lib.sh used decides who serves. The CLI bridge reads

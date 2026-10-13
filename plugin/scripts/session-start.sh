@@ -273,12 +273,12 @@ print(json.dumps({"systemMessage": msg, "hookSpecificOutput": {"hookEventName": 
 
 if ! kemory_resolve_auth; then
   if [ -n "${KEMORY_CREDS_CORRUPT:-}" ]; then
-    emit_auth_fault "Kemory plugin: $KEMORY_CREDS_CORRUPT is not valid JSON and could not be recovered, so the kemory MCP server will not start and context injection, recall, rating and capture are off. Run /kemory:login to write a fresh one."
+    emit_auth_fault "Kemory plugin: $KEMORY_CREDS_CORRUPT is not valid JSON and could not be recovered, so the memory tools cannot reach Kemory and context injection, recall, rating and capture are off. Run /kemory:login to write a fresh one."
   fi
   emit_setup_hint
 fi
 if [ "${KEMORY_TOKEN_EXPIRED:-0}" = "1" ]; then
-  emit_auth_fault "Kemory plugin: your stored Kemory token has expired and could not be refreshed, so the kemory MCP server will not start and context injection, recall, rating and capture are off. Run /kemory:login to sign in again."
+  emit_auth_fault "Kemory plugin: your stored Kemory token has expired and could not be refreshed, so the memory tools cannot reach Kemory and context injection, recall, rating and capture are off. Run /kemory:login to sign in again."
 fi
 
 # Say so when the host has switched our tools off for this session.

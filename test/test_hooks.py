@@ -97,6 +97,9 @@ class McpRecorder(http.server.BaseHTTPRequestHandler):
     # Set to hand out an Mcp-Session-Id on the first reply, as a stateful
     # server would. None means the stateless endpoint we actually have today.
     issue_session: str | None = None
+    # When set, a tools/call with no credential gets the live API's answer:
+    # HTTP 200, isError, and a WWW-Authenticate pointer in _meta. Not a 401.
+    require_auth: bool = False
 
     def do_POST(self):
         n = int(self.headers.get("Content-Length", 0))
@@ -106,6 +109,16 @@ class McpRecorder(http.server.BaseHTTPRequestHandler):
         except ValueError:
             body = {}
         McpRecorder.requests.append((self.headers, body, self.path))
+        if (McpRecorder.require_auth and body.get("method") == "tools/call"
+                and not (self.headers.get("Authorization") or self.headers.get("X-API-Key"))):
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(json.dumps({"jsonrpc": "2.0", "id": body.get("id"), "result": {
+                "content": [{"type": "text", "text": "Authentication required: sign in to Kemory to use this tool."}],
+                "isError": True,
+                "_meta": {"mcp/www_authenticate": ['Bearer error="invalid_token"']}}}).encode())
+            return
         self.send_response(McpRecorder.status)
         self.send_header("Content-Type", "application/json")
         if McpRecorder.issue_session:
@@ -1660,6 +1673,7 @@ class McpEntryTest(unittest.TestCase):
     def setUp(self):
         McpRecorder.requests.clear()
         McpRecorder.issue_session = None
+        McpRecorder.require_auth = False
         self.home = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.home, ignore_errors=True)
         # A stub `kemory` on PATH would be launched with exec, so the CLI branch
@@ -1713,6 +1727,68 @@ class McpEntryTest(unittest.TestCase):
         self.assertIn("connector", r.stderr,
                       "must name the connector case, which is not a misconfiguration")
         self.assertEqual(r.stdout, "", "a failed launcher must not answer requests")
+
+    TOOLCALL = '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"kemory_recall","arguments":{}}}'
+
+    def grok_root(self):
+        return str(pathlib.Path(self.home) / ".grok" / "installed-plugins" / "kemory" / "plugin")
+
+    def test_grok_without_a_credential_starts_signed_out_with_every_tool(self):
+        # Grok lists a server's tools once, at session start. Signed out, the
+        # API still lists them, so the host gets the full set with no credential.
+        r = self.run_mcp([self.REQ], CLAUDE_PLUGIN_ROOT=self.grok_root())
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("signed out", r.stderr)
+        reply = json.loads(r.stdout.strip())
+        self.assertEqual(reply["result"]["tools"], [{"name": "kemory_recall"}])
+        headers, _, _ = McpRecorder.requests[-1]
+        self.assertIsNone(headers.get("Authorization"))
+        self.assertIsNone(headers.get("X-API-Key"))
+
+    def test_grok_signed_out_tool_call_names_the_fix(self):
+        McpRecorder.require_auth = True
+        r = self.run_mcp([self.TOOLCALL], CLAUDE_PLUGIN_ROOT=self.grok_root())
+        reply = json.loads(r.stdout.strip())
+        self.assertTrue(reply["result"]["isError"], "a tool error is what the model reads")
+        text = reply["result"]["content"][0]["text"]
+        self.assertIn("/kemory:login", text)
+        self.assertIn("No restart", text)
+
+    def test_grok_sign_in_mid_session_works_on_the_next_call(self):
+        # The point of starting signed out: /kemory:login in the same session,
+        # then the next call goes through with the new credential.
+        McpRecorder.require_auth = True
+        proc = subprocess.Popen([str(SCRIPTS / "mcp.sh")], stdin=subprocess.PIPE,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                env=self.env(CLAUDE_PLUGIN_ROOT=self.grok_root()))
+        watchdog = threading.Timer(30, proc.kill)
+        watchdog.start()
+        try:
+            proc.stdin.write(self.TOOLCALL + "\n")
+            proc.stdin.flush()
+            first = json.loads(proc.stdout.readline())
+            self.assertTrue(first["result"]["isError"])
+            self.write_creds()  # what /kemory:login writes
+            proc.stdin.write(self.TOOLCALL.replace('"id":2', '"id":3') + "\n")
+            proc.stdin.flush()
+            second = json.loads(proc.stdout.readline())
+        finally:
+            watchdog.cancel()
+            proc.stdin.close()
+            proc.wait(timeout=10)
+            proc.stdout.close()
+            proc.stderr.close()
+        self.assertEqual(second["id"], 3)
+        self.assertNotIn("isError", second["result"])
+        headers, _, _ = McpRecorder.requests[-1]
+        self.assertEqual(headers.get("Authorization"), "Bearer tok")
+
+    def test_claude_code_without_a_credential_still_exits(self):
+        # Under Claude Code a connector user has no credential by design; a
+        # signed-out bundled server would sit beside the connector's tools.
+        r = self.run_mcp([self.REQ], CLAUDE_PLUGIN_ROOT=str(ROOT / "plugin"))
+        self.assertEqual(r.returncode, 1)
+        self.assertEqual(r.stdout, "")
 
     def test_environment_credential_serves_through_the_bridge(self):
         r = self.run_mcp([self.REQ], with_cli=True, KEMORY_API_KEY="env-key")
@@ -2145,6 +2221,25 @@ class DeviceLoginTest(unittest.TestCase):
                 "email": "person@example.com", "version": 2}
         body.update(over)
         (d / "credentials-prod").write_text(json.dumps(body))
+
+    def test_grok_is_told_no_restart_is_needed(self):
+        r = self.run_login(CLAUDE_PLUGIN_ROOT=str(
+            pathlib.Path(self.home) / ".grok" / "installed-plugins" / "k" / "plugin"))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("no restart needed", r.stdout)
+        self.assertNotIn("Restart your session", r.stdout)
+
+    def test_claude_code_is_still_told_to_restart(self):
+        r = self.run_login(CLAUDE_PLUGIN_ROOT=str(ROOT / "plugin"))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("Restart your session", r.stdout)
+
+    def test_login_command_works_where_the_bang_line_does_not_run(self):
+        # Grok passes a command's !`...` line to the model as plain text. The
+        # command must say what to do then, or the model searches for it.
+        text = (ROOT / "plugin" / "commands" / "login.md").read_text()
+        self.assertIn("background task", text)
+        self.assertIn("Do not read or search", text)
 
     def test_writes_the_same_shape_the_cli_writes(self):
         # A CLI installed later must find the user already signed in, which
@@ -2978,6 +3073,18 @@ class GrokDisabledServerTest(unittest.TestCase):
     def test_fallback_reads_a_list_split_across_lines(self):
         self.config.write_text('disabled_mcp_servers = [\n  "serena",\n  "kemory",\n]\n\n[cli]\nx = 1\n')
         self.assertIn("switched off", self.status(PYTHONPATH=self.no_tomllib()).stdout)
+
+    def test_detects_grok_from_where_it_is_installed(self):
+        # Grok does not export CLAUDE_PLUGIN_ROOT to the shell /kemory:status
+        # runs in, so the install location has to be enough on its own.
+        self.disable("kemory")
+        dest = pathlib.Path(self.home) / ".grok" / "installed-plugins" / "kemory" / "plugin"
+        shutil.copytree(ROOT / "plugin", dest)
+        e = self.env()
+        e.pop("CLAUDE_PLUGIN_ROOT", None)
+        r = subprocess.run([str(dest / "scripts" / "status.sh")], input="{}",
+                           text=True, capture_output=True, env=e)
+        self.assertIn("switched off", r.stdout)
 
     def test_session_start_warns_once_a_day_not_every_session(self):
         # Durable config the user may have set on purpose: say it once, then
