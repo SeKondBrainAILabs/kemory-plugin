@@ -329,6 +329,40 @@ $KEMORY_NOTICE"
   fi
 fi
 
+# Grok's equivalent of the skip above: a server listed in disabled_mcp_servers
+# in ~/.grok/config.toml is never launched, and nothing tells the agent, which
+# then works the whole session believing there are no memory tools.
+#
+# Throttled once a day, unlike the skip notice. That one reports a transient
+# fault that clears in fifteen minutes; this reports durable config the user
+# may have set on purpose, so it follows the setup hint's rule instead: say it,
+# then stop repeating it. /kemory:status reports it every time it is asked.
+#
+# Runs after resolve_auth for the same reason as the skip check: with no
+# credential the setup hint already answers why there are no tools.
+grok_disabled="$(kemory_grok_disabled_server)"
+if [ -n "$grok_disabled" ]; then
+  stamp="$HOME/.kemory/.grok-disabled-hint"
+  fresh=1
+  if [ -f "$stamp" ]; then
+    now=$(date +%s)
+    age=$(( now - $(stat -f %m "$stamp" 2>/dev/null || stat -c %Y "$stamp" 2>/dev/null || echo "$now") ))
+    [ "$age" -lt 86400 ] && fresh=0
+  fi
+  if [ "$fresh" -eq 1 ]; then
+    mkdir -p "$(dirname "$stamp")" 2>/dev/null && touch "$stamp" 2>/dev/null
+    KEMORY_GROK_DISABLED_NOTICE="Kemory plugin: Grok has the kemory MCP server switched off: $grok_disabled is listed in disabled_mcp_servers in ~/.grok/config.toml, so the kemory_* tools are unavailable in this session. Your hooks are unaffected, so context injection, recall and capture still work. To get the tools back, remove it from that list and restart Grok. Run /kemory:status for detail."
+    if [ -n "$KEMORY_NOTICE" ]; then
+      KEMORY_NOTICE="$KEMORY_GROK_DISABLED_NOTICE
+
+$KEMORY_NOTICE"
+    else
+      KEMORY_NOTICE="$KEMORY_GROK_DISABLED_NOTICE"
+    fi
+    export KEMORY_NOTICE
+  fi
+fi
+
 command -v curl >/dev/null 2>&1 || { emit_instruction_only; exit 0; }
 
 DEPTH="${KEMORY_CONTEXT_DEPTH:-l3}"
