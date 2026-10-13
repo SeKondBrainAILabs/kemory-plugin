@@ -6,8 +6,9 @@ open-source [community edition](https://github.com/SeKondBrainAILabs/kemory-comm
 
 One plugin, one tree, a manifest per host: `.claude-plugin/plugin.json` for
 Claude Code and `.grok-plugin/plugin.json` for Grok Build, both carrying the
-same version. Claude Code is the host it is installed and tested on today; the
-Grok Build catalog entry is in review.
+same version. It installs and runs on both today; the Grok Build catalog entry
+is in review, so for now Grok installs it from this repository
+([Grok Build](#grok-build)).
 
 An MCP server gives an agent memory *tools*. This plugin makes it actually use
 them: relevant memories arrive under every prompt, a turn that settles
@@ -95,6 +96,32 @@ Git Bash or WSL, which is untested.
 
 </details>
 
+### Grok Build
+
+Once the xAI catalog entry is live, install Kemory from `/marketplace`. Until
+then, install it from this repository in a terminal:
+
+```
+grok plugin install SeKondBrainAILabs/kemory-plugin
+```
+
+If `/kemory:login` is not offered afterwards, restart Grok: it does not always
+pick up a new plugin's commands in a running session. Then sign in:
+
+```
+/kemory:login
+```
+
+Approve in the browser, then restart Grok so the memory tools start with the
+new credential. `/kemory:status` confirms it, and if the `kemory_*` tools are
+missing it says why.
+
+Grok's MCP Servers tab cannot delete a server that a plugin provides. If the
+Kemory server ends up disabled there, it is listed in `disabled_mcp_servers` in
+`~/.grok/config.toml`, and `/kemory:status` reports it. Remove it from that
+list and restart Grok to get the tools back. To remove Kemory altogether, run
+`grok plugin uninstall kemory`.
+
 ### Which surface you are on
 
 **Claude Code** and **Claude Desktop** are different products, and only one of
@@ -145,7 +172,13 @@ The desktop app has no `/plugin` command. There, run this in a terminal:
 claude plugin update kemory@kemory
 ```
 
-Restart Claude Code afterwards to load the new hooks. `/kemory:status` prints
+In Grok Build:
+
+```
+grok plugin update kemory
+```
+
+Restart the host afterwards to load the new hooks. `/kemory:status` prints
 the version you are on, and [CHANGELOG.md](CHANGELOG.md) says what moved.
 
 ## How it works
