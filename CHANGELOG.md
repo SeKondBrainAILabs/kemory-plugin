@@ -3,6 +3,17 @@
 All notable changes to this project are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.14.0] — 2026-10-13
+
+### Added
+- **Grok Build: the plugin now says when Grok has switched its MCP server off.**
+  A server listed in `disabled_mcp_servers` in `~/.grok/config.toml` is never
+  launched, and Grok's MCP Servers tab offers disabling as the only action on
+  a plugin's server. Until now nothing said so: the hooks kept working and the
+  `kemory_*` tools were simply missing. `/kemory:status` now reports it every
+  time, without a "will start" tick, and a new Grok session tells the agent
+  once a day. The setting is read, never changed.
+
 ## [0.13.3] — 2026-10-12
 
 ### Fixed
