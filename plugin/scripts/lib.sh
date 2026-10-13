@@ -248,12 +248,13 @@ kemory_active_org() {
   [ -n "${KEMORY_BASE_URL:-}" ] && [ -n "${KEMORY_AUTH_HEADER:-}" ] || return 0
   command -v curl >/dev/null 2>&1 || return 0
   command -v python3 >/dev/null 2>&1 || return 0
-  local args=(-s --max-time "${KEMORY_ORG_TIMEOUT:-5}"
-              -H "Content-Type: application/json"
-              -H "Accept: application/json, text/event-stream"
-              -H "$KEMORY_AUTH_HEADER")
-  [ -n "${KEMORY_ORG_HEADER:-}" ] && args+=(-H "$KEMORY_ORG_HEADER")
-  curl "${args[@]}" -X POST "$KEMORY_BASE_URL/mcp/v1" \
+  # Options written inline rather than through an array, so the PRIVACY.md
+  # call-site guard sees this call.
+  curl -s --max-time "${KEMORY_ORG_TIMEOUT:-5}" \
+    -H "Content-Type: application/json" \
+    -H "Accept: application/json, text/event-stream" \
+    -H "$KEMORY_AUTH_HEADER" ${KEMORY_ORG_HEADER:+-H "$KEMORY_ORG_HEADER"} \
+    -X POST "$KEMORY_BASE_URL/mcp/v1" \
     -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"kemory_whoami","arguments":{}}}' \
     2>/dev/null | python3 -c '
 import json, sys
