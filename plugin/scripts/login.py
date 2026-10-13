@@ -108,6 +108,36 @@ def under_grok() -> bool:
     return "/.grok/" in here or "/.grok/" in root
 
 
+def active_org(base_url: str, access_token: str, org_id: str) -> tuple[str, str] | None:
+    """The organisation the new credential acts in, by name: (name, id).
+
+    Same question lib.sh's kemory_active_org asks, over the MCP endpoint, because
+    the name only exists server-side. With no earlier credential file the
+    active organisation falls back to the account's home one, which may not be
+    the one the user works in; saying its name is what makes that visible.
+    None on any failure: a missing name must never fail a sign-in that worked.
+    """
+    request = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                          "params": {"name": "kemory_whoami", "arguments": {}}}).encode()
+    headers = {"Content-Type": "application/json",
+               "Accept": "application/json, text/event-stream",
+               "Authorization": f"Bearer {access_token}"}
+    if org_id:
+        headers["X-Organization-ID"] = org_id
+    try:
+        req = urllib.request.Request(base_url.rstrip("/") + "/mcp/v1", data=request,
+                                     headers=headers, method="POST")
+        with urllib.request.urlopen(req, timeout=5) as response:
+            data = json.loads(response.read())
+        found = (data.get("result") or {}).get("structuredContent") or {}
+    except Exception:  # noqa: BLE001 — best effort, see the docstring
+        return None
+    name = found.get("org_name")
+    if not (isinstance(name, str) and name.strip()):
+        return None
+    return name.strip(), str(found.get("org_id") or org_id or "")
+
+
 def claims_of(access_token: str) -> dict:
     """The access token's own claims. `email` and `org_id` live here, so the
     credential file can be filled with no extra API call."""
@@ -240,6 +270,16 @@ def main() -> None:
             claims = claims_of(body["access_token"])
             who = claims.get("email") or claims.get("preferred_username") or "signed in"
             print(f"\nSigned in as {who}. Credential written to {path}.")
+            try:
+                with open(path) as fh:
+                    acting_in = json.load(fh).get("active_org_id") or ""
+            except Exception:  # noqa: BLE001 — the name is extra, the sign-in already worked
+                acting_in = ""
+            org = active_org(base_url, body["access_token"], acting_in)
+            if org:
+                name, oid = org
+                print(f"Active organisation: {name}" + (f" ({oid})" if oid else "")
+                      + ". To use another one, run 'kemory use <org-id>' with the Kemory CLI.")
             if under_grok():
                 # Under Grok the bundled server started signed out and reads
                 # this file when a call needs it (mcp.sh, mcp_bridge.py).

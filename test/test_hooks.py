@@ -41,6 +41,9 @@ class Recorder(http.server.BaseHTTPRequestHandler):
     get_status: int = 200
     # Body for GET /api/v1/agents; None serves get_payload like any other GET.
     agents_payload = None
+    # kemory_whoami structuredContent served on /mcp/v1; None leaves that path
+    # to the default reply, as when the server cannot name the organisation.
+    whoami_org = None
     # Keycloak refresh response, and its status.
     token_payload: dict = {"access_token": "fresh-token", "expires_in": 3600}
     token_status: int = 200
@@ -55,6 +58,16 @@ class Recorder(http.server.BaseHTTPRequestHandler):
             body = {k: v[0] for k, v in
                     urllib.parse.parse_qs(raw.decode("utf-8", "replace")).items()}
         Recorder.posts.append((self.headers, body, self.path))
+        if self.path.endswith("/mcp/v1") and Recorder.whoami_org is not None:
+            WHO = Recorder.whoami_org
+            raw = json.dumps({"jsonrpc": "2.0", "id": body.get("id") if isinstance(body, dict) else 1, "result": {
+                "content": [{"type": "text", "text": json.dumps(WHO)}], "isError": False,
+                "structuredContent": WHO}}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(raw)
+            return
         if self.path.endswith("/protocol/openid-connect/token"):
             self.send_response(Recorder.token_status)
             self.send_header("Content-Type", "application/json")
@@ -144,6 +157,7 @@ def reset_recorder():
     Recorder.memories_status = 201
     Recorder.get_status = 200
     Recorder.agents_payload = None
+    Recorder.whoami_org = None
     Recorder.token_payload = {"access_token": "fresh-token",
                               "expires_in": 3600}
     Recorder.token_status = 200
@@ -1345,6 +1359,19 @@ class HookTest(unittest.TestCase):
         return {"agent_id": "a", "agent_name": name, "client_slug": slug,
                 "status": "active", "last_active_at": t}
 
+    def test_status_names_the_active_organisation(self):
+        # A wrong organisation is otherwise invisible: captures just go there.
+        Recorder.whoami_org = {"org_id": "org-1", "org_name": "Acme"}
+        r = self.run_script("status.sh", {}, KEMORY_TOKEN="t")
+        self.assertIn("organisation: Acme (org-1)", r.stdout)
+        self.assertIn("kemory use", r.stdout)
+
+    def test_status_is_quiet_about_the_organisation_when_it_cannot_be_named(self):
+        r = self.run_script("status.sh", {}, KEMORY_TOKEN="t")
+        self.assertEqual(r.returncode, 0)
+        self.assertNotIn("organisation:", r.stdout)
+        self.assertNotIn("Traceback", r.stdout + r.stderr)
+
     def test_status_flags_tools_that_never_connected(self):
         Recorder.agents_payload = [self.agent(slug="claude-web")]
         r = self.run_script("status.sh", {}, KEMORY_TOKEN="t")
@@ -2152,6 +2179,10 @@ class IdpRecorder(http.server.BaseHTTPRequestHandler):
     device_response: dict = {}
     device_status: int = 200
     discovery: dict = {}
+    # The kemory_whoami structuredContent served on /mcp/v1; None answers 404,
+    # as an older server would.
+    whoami: dict | None = None
+    whoami_headers: list = []
 
     def _json(self, status, body):
         raw = json.dumps(body).encode()
@@ -2172,7 +2203,17 @@ class IdpRecorder(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self):
         n = int(self.headers.get("Content-Length", 0))
-        form = urllib.parse.parse_qs(self.rfile.read(n).decode())
+        raw_body = self.rfile.read(n)
+        if self.path.endswith("/mcp/v1"):
+            IdpRecorder.whoami_headers.append({k.lower(): v for k, v in self.headers.items()})
+            if IdpRecorder.whoami is None:
+                self._json(404, {})
+                return
+            body = json.loads(raw_body or b"{}")
+            WHO = IdpRecorder.whoami
+            self._json(200, {"jsonrpc": "2.0", "id": body.get("id") if isinstance(body, dict) else 1, "result": {                 "content": [{"type": "text", "text": json.dumps(WHO)}], "isError": False,                 "structuredContent": WHO}})
+            return
+        form = urllib.parse.parse_qs(raw_body.decode())
         flat = {k: v[0] for k, v in form.items()}
         IdpRecorder.requests.append((self.path, flat))
         if self.path.endswith("/auth/device"):
@@ -2219,6 +2260,8 @@ class DeviceLoginTest(unittest.TestCase):
     def setUp(self):
         self.base = f"http://127.0.0.1:{self.port}"
         IdpRecorder.requests.clear()
+        IdpRecorder.whoami = None
+        IdpRecorder.whoami_headers.clear()
         IdpRecorder.discovery = {"issuer": self.base}
         IdpRecorder.device_status = 200
         IdpRecorder.device_response = {
@@ -2261,6 +2304,30 @@ class DeviceLoginTest(unittest.TestCase):
                 "email": "person@example.com", "version": 2}
         body.update(over)
         (d / "credentials-prod").write_text(json.dumps(body))
+
+    def test_login_names_the_active_organisation(self):
+        # With no earlier credential the active organisation is the account's
+        # home one, which may not be the one the user works in. Say its name.
+        IdpRecorder.whoami = {"org_id": "org-default", "org_name": "Acme"}
+        r = self.run_login()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("Active organisation: Acme (org-default)", r.stdout)
+        self.assertIn("kemory use", r.stdout)
+        self.assertEqual(IdpRecorder.whoami_headers[-1].get("x-organization-id"), "org-default")
+
+    def test_login_asks_in_the_organisation_kemory_use_chose(self):
+        self.write_creds()  # active_org_id "org-switched-to", chosen with `kemory use`
+        IdpRecorder.whoami = {"org_id": "org-switched-to", "org_name": "Chosen"}
+        r = self.run_login()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(IdpRecorder.whoami_headers[-1].get("x-organization-id"), "org-switched-to")
+        self.assertIn("Active organisation: Chosen", r.stdout)
+
+    def test_login_still_succeeds_when_the_organisation_cannot_be_named(self):
+        r = self.run_login()  # whoami answers 404, as an older server would
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("Signed in as", r.stdout)
+        self.assertNotIn("Active organisation", r.stdout)
 
     def test_grok_is_told_no_restart_is_needed(self):
         r = self.run_login(CLAUDE_PLUGIN_ROOT=str(
