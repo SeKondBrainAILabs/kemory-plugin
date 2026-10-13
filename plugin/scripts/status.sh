@@ -147,6 +147,21 @@ if [ -n "$skipped" ]; then
   fi
 fi
 
+# Grok's equivalent: a server named in disabled_mcp_servers is never launched,
+# and nothing else in this report would say so. Same rule as the skip above —
+# no "will start" tick beside a host that is not going to start it. Skipped
+# while standing down, because then the bundled server giving way is correct.
+grok_disabled=""
+[ "$standing_down" -eq 0 ] && grok_disabled="$(kemory_grok_disabled_server)"
+if [ -n "$grok_disabled" ]; then
+  verb="would start"
+  serves="info"
+  bad "Grok has this server switched off — '$grok_disabled' is in disabled_mcp_servers"
+  info "in ~/.grok/config.toml, so the kemory_* tools are not loaded in any session"
+  info "remove it from that list and restart Grok to get them back; your hooks are"
+  info "unaffected, so context injection, recall and capture still work"
+fi
+
 if [ -n "${KEMORY_BASE_URL:-}" ]; then
   if [ -n "${KEMORY_API_KEY:-}" ] || [ -n "${KEMORY_TOKEN:-}" ]; then
     if command -v python3 >/dev/null 2>&1; then

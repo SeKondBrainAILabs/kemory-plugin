@@ -553,6 +553,73 @@ if best is not None:
 PY
 }
 
+# Ask Grok Build whether the user has switched our MCP server off.
+#
+# Grok keeps a top-level `disabled_mcp_servers` list in ~/.grok/config.toml,
+# and a server named there is never launched. Its MCP Servers tab cannot
+# delete a server a plugin provides ("only locally-configured servers can be
+# deleted"), so disabling is the one action it offers, and nothing afterwards
+# says so: the hooks keep running, recall keeps firing, and the kemory_* tools
+# are simply absent. That is the Grok shape of the failure
+# kemory_mcp_skipped_at() reports for Claude Code.
+#
+# Only under Grok. A Grok config on a machine where this session runs in
+# another host says nothing about this session.
+#
+# Read-only, and deliberately so: the list is the user's own setting, and may
+# be deliberate. Saying what it does is the fix; editing it is not ours to do.
+#
+# Matches the bundled server's name exactly, or as the last segment of a
+# namespaced name ("plugin:kemory:kemory"). A substring match would report a
+# user's own deliberately disabled "kemory-staging" entry as our server.
+#
+# Echoes the matching entry; silent otherwise, including when the config is
+# absent, unreadable or not valid TOML.
+kemory_grok_disabled_server() {
+  case "${CLAUDE_PLUGIN_ROOT:-}" in */.grok/*) ;; *) return 0 ;; esac
+  command -v python3 >/dev/null 2>&1 || return 0
+  python3 - <<'PY' 2>/dev/null
+import os, re
+
+path = os.path.expanduser("~/.grok/config.toml")
+try:
+    with open(path, "rb") as fh:
+        raw = fh.read()
+except Exception:
+    raise SystemExit(0)
+
+names = None
+try:
+    import tomllib  # Python 3.11+
+except ImportError:
+    tomllib = None
+
+if tomllib is not None:
+    try:
+        names = tomllib.loads(raw.decode("utf-8")).get("disabled_mcp_servers")
+    except Exception:
+        raise SystemExit(0)
+else:
+    # Older Python: read just the top-level key. In TOML that means before the
+    # first table header, so search only that prefix: the same key under a
+    # table, such as [cli], is a different key and Grok would not act on it.
+    # Anything stranger than a flat list of strings is left unreported rather
+    # than guessed at.
+    top = re.split(rb'(?m)^\s*\[', raw, maxsplit=1)[0]
+    m = re.search(rb'(?m)^disabled_mcp_servers\s*=\s*\[([^\]]*)\]', top)
+    if m:
+        pairs = re.findall(r'"([^"]*)"|\'([^\']*)\'', m.group(1).decode("utf-8", "replace"))
+        names = [a or b for a, b in pairs]
+
+if not isinstance(names, list):
+    raise SystemExit(0)
+for name in names:
+    if isinstance(name, str) and (name == "kemory" or name.endswith(":kemory")):
+        print(name)
+        break
+PY
+}
+
 # Locate the host's per-cwd MCP log directory for a cache key, on THIS machine.
 #
 # Printing a literal path is how the first version of the skip report shipped a
