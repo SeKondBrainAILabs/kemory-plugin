@@ -20,8 +20,9 @@ These are all of its calls:
   `Stop`/`PreCompact`/`SessionEnd` hooks call your Kemory instance, as the table below shows.
 - **Memory tools.** The bundled MCP server sends the arguments of every Kemory
   memory tool Claude calls to the same instance, for example the text of a
-  memory being stored or a recall query. When the `kemory` CLI is absent, the
-bundled bridge sends them to `/mcp/v1`.
+  memory being stored or a recall query. When the bundled bridge serves them
+  (the `kemory` CLI is absent, or the credential comes from `KEMORY_API_KEY`
+  or `KEMORY_TOKEN`), it sends them to `/mcp/v1`.
 - **`/kemory:status`.** Sends an authenticated GET to `/api/v1/namespaces` on
   the same instance and, for an OAuth credential only, a GET to
   `/api/v1/agents`.
