@@ -25,11 +25,16 @@ These are all of its calls:
   or `KEMORY_TOKEN`), it sends them to `/mcp/v1`.
 - **`/kemory:status`.** Sends an authenticated GET to `/api/v1/namespaces` on
   the same instance and, for an OAuth credential only, a GET to
-  `/api/v1/agents`.
+  `/api/v1/agents`. When that GET succeeds, it also sends one `kemory_whoami`
+  call to `/mcp/v1`, with the credential and the selected organisation's id, to
+  show that organisation's name. Nothing else goes with it.
 - **`/kemory:login`.** Asks the instance's
   `/.well-known/oauth-authorization-server` which identity provider it uses,
   then runs the device sign-in (`/protocol/openid-connect/auth/device`) and
   token (`/protocol/openid-connect/token`) requests against that provider.
+  After signing in it sends one `kemory_whoami` call to `/mcp/v1` on the
+  instance, with the new token and the active organisation's id, to tell you
+  which organisation you are now in.
 - **Token refresh.** When a stored OAuth token has expired, the hooks send the
   refresh token to `/protocol/openid-connect/token` on the identity provider
   named in the credential file.

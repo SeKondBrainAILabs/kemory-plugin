@@ -3468,8 +3468,8 @@ OUTBOUND_CALL_PATTERN = re.compile(
 # PRIVACY.md says what it sends and to where.
 EXPECTED_OUTBOUND_CALL_SITES = {
     "scripts/capture.sh": 1,
-    "scripts/lib.sh": 1,
-    "scripts/login.py": 2,
+    "scripts/lib.sh": 2,
+    "scripts/login.py": 3,
     "scripts/mcp_bridge.py": 1,
     "scripts/prompt-recall.sh": 1,
     "scripts/session-start.sh": 1,
