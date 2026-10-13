@@ -3333,6 +3333,62 @@ def kemory_paths_missing_from_privacy(source_texts, privacy_text):
     )
 
 
+OUTBOUND_HOST_PATTERN = re.compile(r"https?://([A-Za-z0-9.-]+)")
+OUTBOUND_ENDPOINT_PATTERN = re.compile(
+    r"/((?:api|mcp)/v\d+(?:/[A-Za-z0-9_-]+)*"
+    r"|\.well-known/[A-Za-z0-9_-]+"
+    r"|protocol/openid-connect(?:/[A-Za-z0-9_-]+)+)"
+)
+OUTBOUND_CALL_PATTERN = re.compile(
+    r"urlopen\(|\bcurl\s+-|\bwget\b|http\.client|\brequests\.(?:get|post|put|delete|request)\("
+)
+
+# Call sites per file, relative to plugin/. A new one fails the test until
+# PRIVACY.md says what it sends and to where.
+EXPECTED_OUTBOUND_CALL_SITES = {
+    "scripts/capture.sh": 1,
+    "scripts/lib.sh": 1,
+    "scripts/login.py": 2,
+    "scripts/mcp_bridge.py": 1,
+    "scripts/prompt-recall.sh": 1,
+    "scripts/session-start.sh": 1,
+    "scripts/status.sh": 2,
+}
+
+OUTBOUND_SOURCES = sorted(
+    [path for folder in (SCRIPTS, ROOT / "plugin" / "hooks")
+     for path in folder.rglob("*") if path.is_file()]
+    + [ROOT / "plugin" / ".mcp.json"]
+)
+
+
+def outbound_missing_from_privacy(source_texts, privacy_text):
+    """Hosts and endpoint paths that the sources use and PRIVACY.md does not name.
+
+    A host is listed when PRIVACY.md holds it as a whole host name. An endpoint
+    is listed when PRIVACY.md holds it not followed by another path character,
+    so `/api/v1/memories/search` does not cover `/api/v1/memories`.
+    """
+    hosts, endpoints = set(), set()
+    for text in source_texts:
+        hosts.update(OUTBOUND_HOST_PATTERN.findall(text))
+        endpoints.update("/" + path for path in OUTBOUND_ENDPOINT_PATTERN.findall(text))
+    missing = [
+        host for host in hosts
+        if not re.search(r"(?<![A-Za-z0-9.-])" + re.escape(host) + r"(?![A-Za-z0-9-]|\.[A-Za-z0-9])",
+                         privacy_text)
+    ]
+    missing += [
+        endpoint for endpoint in endpoints
+        if not re.search(re.escape(endpoint) + r"(?![A-Za-z0-9_/-])", privacy_text)
+    ]
+    return sorted(missing)
+
+
+def outbound_call_sites(text):
+    return len(OUTBOUND_CALL_PATTERN.findall(text))
+
+
 class PrivacyDocTest(unittest.TestCase):
     def test_every_kemory_path_in_scripts_is_listed_in_privacy(self):
         sources = [
@@ -3360,6 +3416,42 @@ class PrivacyDocTest(unittest.TestCase):
         self.assertEqual(
             kemory_paths_missing_from_privacy([source], "`~/.kemory/credentials-<env>`"),
             ["credentials"])
+
+    def test_every_outbound_host_and_endpoint_is_listed_in_privacy(self):
+        sources = [path.read_text(errors="replace") for path in OUTBOUND_SOURCES]
+        privacy = (ROOT / "PRIVACY.md").read_text(errors="replace")
+        missing = outbound_missing_from_privacy(sources, privacy)
+        self.assertEqual(missing, [], f"PRIVACY.md does not name: {missing}")
+
+    def test_outbound_call_sites_match_inventory(self):
+        plugin = ROOT / "plugin"
+        found = {}
+        for path in OUTBOUND_SOURCES:
+            count = outbound_call_sites(path.read_text(errors="replace"))
+            if count:
+                found[path.relative_to(plugin).as_posix()] = count
+        self.assertEqual(
+            found, EXPECTED_OUTBOUND_CALL_SITES,
+            "Outbound call sites changed. State in PRIVACY.md what the new call "
+            "sends and to where, then update EXPECTED_OUTBOUND_CALL_SITES.")
+
+    def test_scanner_reports_an_unlisted_host(self):
+        self.assertEqual(
+            outbound_missing_from_privacy(["curl https://evil.example/x"], ""),
+            ["evil.example"])
+
+    def test_scanner_reports_an_unlisted_endpoint(self):
+        self.assertEqual(
+            outbound_missing_from_privacy(['"$KEMORY_BASE_URL/api/v1/bogus"'], ""),
+            ["/api/v1/bogus"])
+
+    def test_longer_endpoint_does_not_cover_shorter(self):
+        self.assertEqual(
+            outbound_missing_from_privacy(["/api/v1/memories"], "`/api/v1/memories/search`"),
+            ["/api/v1/memories"])
+
+    def test_call_site_counter_ignores_command_v_curl(self):
+        self.assertEqual(outbound_call_sites("command -v curl >/dev/null\ncurl -s x"), 1)
 
 
 if __name__ == "__main__":

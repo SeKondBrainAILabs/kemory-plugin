@@ -10,30 +10,38 @@ The plugin is a client. It sends data to the Kemory instance you point it at,
 hosted or your own via `KEMORY_URL`, and, for sign-in and token refresh only,
 to the identity provider that instance names. It sends no telemetry and no
 analytics. Its update notice reads the marketplace copy already on your disk
-and does not contact the network. These are all of its calls:
+and does not contact the network. The hosted instance is
+`https://api.kemory.s9n.ai`, the default when `KEMORY_URL` is unset. A
+credential that still names the retired `https://kemory.prod.apps.s9n.ai` is
+sent to `api.kemory.s9n.ai` instead, and the old host is never contacted.
+These are all of its calls:
 
 - **Hooks.** The `SessionStart`, `UserPromptSubmit` and
   `Stop`/`PreCompact`/`SessionEnd` hooks call your Kemory instance, as the table below shows.
 - **Memory tools.** The bundled MCP server sends the arguments of every Kemory
   memory tool Claude calls to the same instance, for example the text of a
-  memory being stored or a recall query.
-- **`/kemory:status`.** Sends a health check and an authenticated request to
-  the same instance.
+  memory being stored or a recall query. When the `kemory` CLI is absent, the
+bundled bridge sends them to `/mcp/v1`.
+- **`/kemory:status`.** Sends an authenticated GET to `/api/v1/namespaces` on
+  the same instance and, for an OAuth credential only, a GET to
+  `/api/v1/agents`.
 - **`/kemory:login`.** Asks the instance's
   `/.well-known/oauth-authorization-server` which identity provider it uses,
-  then runs the device sign-in and token requests against that provider.
+  then runs the device sign-in (`/protocol/openid-connect/auth/device`) and
+  token (`/protocol/openid-connect/token`) requests against that provider.
 - **Token refresh.** When a stored OAuth token has expired, the hooks send the
-  refresh token to the identity provider named in the credential file.
+  refresh token to `/protocol/openid-connect/token` on the identity provider
+  named in the credential file.
 
 ## What each hook sends
 
-| Hook | Event | What leaves your machine | Default |
-|------|-------|--------------------------|---------|
-| context injection | `SessionStart` | Your credential only; reads your namespace summaries back | on |
-| prompt recall | `UserPromptSubmit` | **The text of your prompt**, as a search query | on |
-| rate reminder | `PostToolUse` | Nothing — runs entirely locally | on |
-| store nudge | `Stop` | Nothing — reads the transcript on your machine and prints guidance | **off** |
-| session capture | `Stop`, `PreCompact`, `SessionEnd` | Your own prompts: last 12 turns, 8000 characters max, redacted, stored `user-private` in `user:sessions` | on |
+| Hook | Event | Endpoint | What leaves your machine | Default |
+|------|-------|----------|--------------------------|---------|
+| context injection | `SessionStart` | `/api/v1/user/context` | Your credential only; reads your namespace summaries back | on |
+| prompt recall | `UserPromptSubmit` | `/api/v1/memories/search` | **The text of your prompt**, as a search query | on |
+| rate reminder | `PostToolUse` | none | Nothing — runs entirely locally | on |
+| store nudge | `Stop` | none | Nothing — reads the transcript on your machine and prints guidance | **off** |
+| session capture | `Stop`, `PreCompact`, `SessionEnd` | `/api/v1/memories` | Your own prompts: last 12 turns, 8000 characters max, redacted, stored `user-private` in `user:sessions` | on |
 
 The optional `kemory-panel` plugin is separate and is not covered by this
 table. It calls Kemory through this plugin's server when you save, rate or
