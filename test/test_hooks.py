@@ -113,6 +113,9 @@ class McpRecorder(http.server.BaseHTTPRequestHandler):
     # When set, a tools/call with no credential gets the live API's answer:
     # HTTP 200, isError, and a WWW-Authenticate pointer in _meta. Not a 401.
     require_auth: bool = False
+    # Scripted replies, consumed one per request: (status, content type, body,
+    # extra headers). Empty means every request gets the default answer below.
+    replies: list = []
 
     def do_POST(self):
         n = int(self.headers.get("Content-Length", 0))
@@ -122,6 +125,16 @@ class McpRecorder(http.server.BaseHTTPRequestHandler):
         except ValueError:
             body = {}
         McpRecorder.requests.append((self.headers, body, self.path))
+        if McpRecorder.replies:
+            status, content_type, payload, extra = McpRecorder.replies.pop(0)
+            self.send_response(status)
+            self.send_header("Content-Type", content_type)
+            for name, value in extra.items():
+                self.send_header(name, value)
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+            return
         if (McpRecorder.require_auth and body.get("method") == "tools/call"
                 and not (self.headers.get("Authorization") or self.headers.get("X-API-Key"))):
             self.send_response(200)
@@ -1741,6 +1754,7 @@ class McpEntryTest(unittest.TestCase):
         McpRecorder.requests.clear()
         McpRecorder.issue_session = None
         McpRecorder.require_auth = False
+        McpRecorder.replies = []
         self.home = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.home, ignore_errors=True)
         # A stub `kemory` on PATH would be launched with exec, so the CLI branch
@@ -1917,6 +1931,116 @@ class McpEntryTest(unittest.TestCase):
         first, second = [json.loads(l) for l in r.stdout.strip().splitlines()]
         self.assertIsNone(first["id"])
         self.assertEqual(second["id"], 1, "the bridge must keep serving")
+
+    NOTIFICATION = '{"jsonrpc":"2.0","method":"notifications/initialized"}'
+
+    def stdout_lines(self, r):
+        return [json.loads(l) for l in r.stdout.splitlines()]
+
+    def test_sse_reply_relays_the_last_data_frame(self):
+        body = (b'event: message\n'
+                b'data: {"jsonrpc":"2.0","id":1,"result":{"progress":1}}\n\n'
+                b'data: {"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"final"}]}}\n\n'
+                b'data: [DONE]\n\n')
+        McpRecorder.replies = [(200, "text/event-stream", body, {})]
+        r = self.run_mcp([self.REQ], KEMORY_API_KEY="k")
+        (reply,) = self.stdout_lines(r)
+        self.assertEqual(reply, {"jsonrpc": "2.0", "id": 1,
+                                 "result": {"tools": [{"name": "final"}]}})
+
+    def test_sse_reply_with_no_data_frame_answers_empty_reply(self):
+        McpRecorder.replies = [(200, "text/event-stream", b"data: [DONE]\n\n", {})]
+        r = self.run_mcp([self.REQ], KEMORY_API_KEY="k")
+        (reply,) = self.stdout_lines(r)
+        self.assertEqual(reply["id"], 1)
+        self.assertEqual(reply["error"]["code"], -32603)
+        self.assertIn("empty reply", reply["error"]["message"])
+
+    def test_batch_answers_with_one_array_of_due_replies(self):
+        members = [json.loads(self.REQ),
+                   json.loads(self.NOTIFICATION),
+                   {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}]
+        r = self.run_mcp([json.dumps(members)], KEMORY_API_KEY="k")
+        (batch,) = self.stdout_lines(r)
+        self.assertEqual([x["id"] for x in batch], [1, 2],
+                         "the notification adds no member to the answer")
+        self.assertEqual([body for _, body, _ in McpRecorder.requests], members)
+
+    def test_batch_of_only_notifications_writes_nothing(self):
+        members = [json.loads(self.NOTIFICATION)] * 2
+        r = self.run_mcp([json.dumps(members)], KEMORY_API_KEY="k")
+        self.assertEqual(r.stdout, "")
+        self.assertEqual(len(McpRecorder.requests), 2, "both are still relayed")
+
+    def test_404_drops_the_session_id(self):
+        McpRecorder.replies = [
+            (200, "application/json",
+             b'{"jsonrpc":"2.0","id":1,"result":{}}', {"Mcp-Session-Id": "sess-abc"}),
+            (404, "application/json", b'{"detail":"gone"}', {}),
+        ]
+        lines = [self.REQ.replace('"id":1', f'"id":{i}') for i in (1, 2, 3)]
+        r = self.run_mcp(lines, KEMORY_API_KEY="k")
+        second_request, third_request = McpRecorder.requests[1], McpRecorder.requests[2]
+        self.assertEqual(second_request[0].get("Mcp-Session-Id"), "sess-abc")
+        self.assertIsNone(third_request[0].get("Mcp-Session-Id"),
+                          "the server forgot the session, so it must not be sent again")
+        second = self.stdout_lines(r)[1]
+        self.assertEqual(second["id"], 2)
+        self.assertIn("HTTP 404", second["error"]["message"])
+
+    def test_non_json_reply_answers_in_band(self):
+        McpRecorder.replies = [(200, "application/json", b"<html>bad gateway</html>", {})]
+        r = self.run_mcp([self.REQ, self.REQ.replace('"id":1', '"id":2')],
+                         KEMORY_API_KEY="k")
+        first, second = self.stdout_lines(r)
+        self.assertEqual(first["id"], 1)
+        self.assertEqual(first["error"]["code"], -32603)
+        self.assertIn("non-JSON reply", first["error"]["message"])
+        self.assertEqual(second["id"], 2, "the bridge must keep serving")
+        self.assertIn("result", second)
+
+    def test_empty_reply_answers_in_band(self):
+        McpRecorder.replies = [(200, "application/json", b"", {})]
+        r = self.run_mcp([self.REQ], KEMORY_API_KEY="k")
+        (reply,) = self.stdout_lines(r)
+        self.assertEqual(reply["id"], 1)
+        self.assertIn("empty reply", reply["error"]["message"])
+
+    def test_202_reply_to_a_request_writes_nothing(self):
+        # Current behaviour: the 202 request gets no line at all, though a
+        # request is owed an answer.
+        McpRecorder.replies = [(202, "application/json", b"", {})]
+        r = self.run_mcp([self.REQ, self.REQ.replace('"id":1', '"id":2')],
+                         KEMORY_API_KEY="k")
+        (reply,) = self.stdout_lines(r)
+        self.assertEqual(reply["id"], 2)
+
+    def test_notification_with_http_error_gets_no_reply(self):
+        McpRecorder.status = 500
+        self.addCleanup(setattr, McpRecorder, "status", 200)
+        r = self.run_mcp([self.NOTIFICATION], KEMORY_API_KEY="k")
+        self.assertEqual(r.stdout, "")
+        self.assertEqual(len(McpRecorder.requests), 1)
+
+    def test_notification_to_unreachable_api_gets_no_reply(self):
+        r = self.run_mcp([self.NOTIFICATION], KEMORY_API_KEY="k",
+                         KEMORY_URL="http://127.0.0.1:1")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout, "")
+
+    def test_blank_host_line_is_skipped(self):
+        r = self.run_mcp(["", self.REQ], KEMORY_API_KEY="k")
+        (reply,) = self.stdout_lines(r)
+        self.assertEqual(reply["id"], 1)
+
+    def test_grok_signed_out_non_tool_call_answers_a_jsonrpc_error(self):
+        McpRecorder.status = 401
+        self.addCleanup(setattr, McpRecorder, "status", 200)
+        r = self.run_mcp([self.REQ], CLAUDE_PLUGIN_ROOT=self.grok_root())
+        (reply,) = self.stdout_lines(r)
+        self.assertNotIn("result", reply, "only a tool call answers as a tool error")
+        self.assertEqual(reply["error"]["code"], -32603)
+        self.assertIn("/kemory:login", reply["error"]["message"])
 
     def test_self_hosted_url_is_honoured(self):
         # KEMORY_URL is the one variable that repoints the whole plugin; the
