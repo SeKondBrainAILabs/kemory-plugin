@@ -3624,9 +3624,11 @@ class CursorPluginTest(unittest.TestCase):
 
     def test_mcp_entry_is_the_hosted_server_with_no_credential(self):
         # Cursor signs in with OAuth itself; a header or env here would be a
-        # committed credential or an empty one.
+        # committed credential or an empty one. Cursor starts OAuth only on an
+        # HTTP 401, and plain /mcp/v1 lists its tools without a token (for
+        # ChatGPT); ?auth=required makes the server answer 401 instead.
         servers = json.loads((CURSOR / "mcp.json").read_text())["mcpServers"]
-        self.assertEqual(servers, {"kemory": {"url": "https://api.kemory.s9n.ai/mcp/v1"}})
+        self.assertEqual(servers, {"kemory": {"url": "https://api.kemory.s9n.ai/mcp/v1?auth=required"}})
 
     def test_skill_has_the_frontmatter_cursor_requires(self):
         text = (CURSOR / "skills" / "kemory" / "SKILL.md").read_text()

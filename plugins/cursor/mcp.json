@@ -1,7 +1,7 @@
 {
   "mcpServers": {
     "kemory": {
-      "url": "https://api.kemory.s9n.ai/mcp/v1"
+      "url": "https://api.kemory.s9n.ai/mcp/v1?auth=required"
     }
   }
 }

@@ -7,7 +7,7 @@ Persistent, cross-session memory for the Cursor agent, powered by
 
 | Component | What it does | Needs |
 |---|---|---|
-| MCP server `kemory` | The `kemory_*` tools, served by the hosted Kemory API (`https://api.kemory.s9n.ai/mcp/v1`) | A Kemory account. Cursor signs in through the browser; nothing is stored in this plugin |
+| MCP server `kemory` | The `kemory_*` tools, served by the hosted Kemory API (`https://api.kemory.s9n.ai/mcp/v1?auth=required`) | A Kemory account. Cursor signs in through the browser; nothing is stored in this plugin |
 | Skill `kemory` | How to use memory well: recall before re-deriving, rate what you use, store durable facts | Nothing |
 | Hooks | Load your namespace summaries when an agent session starts; capture the session on `stop`, `preCompact` and `sessionEnd` | The [Kemory CLI](https://github.com/SeKondBrainAILabs/kemory-cli) on `PATH`, signed in with `kemory login` |
 
@@ -54,9 +54,9 @@ Cursor also loads plugins installed in Claude Code. If the Claude Code
   On an older CLI you get the MCP server and skill but no context at session
   start and no capture: update the CLI, or use `kemory connect --host cursor`,
   whose hooks live in `~/.cursor/hooks.json`, which the CLI reads.
-- **Sign-in does not start on its own yet.** The Kemory server lists its tools
-  before you sign in, and Cursor only offers sign-in when a server refuses the
-  connection. Until the server changes, the tools appear but each call answers
-  "Authentication required".
+- **Sign-in needs a Kemory server release.** Cursor offers sign-in only when
+  a server refuses the connection. The plugin asks for that with
+  `?auth=required`. Until the server release that honours it is live, the
+  tools appear without sign-in and each call answers "Authentication required".
 - **Hooks need `bash`.** They run through `bash`, so on Windows they need Git
   Bash or WSL on `PATH`.
