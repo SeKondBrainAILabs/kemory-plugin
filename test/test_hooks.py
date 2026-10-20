@@ -113,6 +113,9 @@ class McpRecorder(http.server.BaseHTTPRequestHandler):
     # When set, a tools/call with no credential gets the live API's answer:
     # HTTP 200, isError, and a WWW-Authenticate pointer in _meta. Not a 401.
     require_auth: bool = False
+    # Scripted replies, consumed one per request: (status, content type, body,
+    # extra headers). Empty means every request gets the default answer below.
+    replies: list = []
 
     def do_POST(self):
         n = int(self.headers.get("Content-Length", 0))
@@ -122,6 +125,16 @@ class McpRecorder(http.server.BaseHTTPRequestHandler):
         except ValueError:
             body = {}
         McpRecorder.requests.append((self.headers, body, self.path))
+        if McpRecorder.replies:
+            status, content_type, payload, extra = McpRecorder.replies.pop(0)
+            self.send_response(status)
+            self.send_header("Content-Type", content_type)
+            for name, value in extra.items():
+                self.send_header(name, value)
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+            return
         if (McpRecorder.require_auth and body.get("method") == "tools/call"
                 and not (self.headers.get("Authorization") or self.headers.get("X-API-Key"))):
             self.send_response(200)
@@ -1741,6 +1754,7 @@ class McpEntryTest(unittest.TestCase):
         McpRecorder.requests.clear()
         McpRecorder.issue_session = None
         McpRecorder.require_auth = False
+        McpRecorder.replies = []
         self.home = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.home, ignore_errors=True)
         # A stub `kemory` on PATH would be launched with exec, so the CLI branch
@@ -1917,6 +1931,116 @@ class McpEntryTest(unittest.TestCase):
         first, second = [json.loads(l) for l in r.stdout.strip().splitlines()]
         self.assertIsNone(first["id"])
         self.assertEqual(second["id"], 1, "the bridge must keep serving")
+
+    NOTIFICATION = '{"jsonrpc":"2.0","method":"notifications/initialized"}'
+
+    def stdout_lines(self, r):
+        return [json.loads(l) for l in r.stdout.splitlines()]
+
+    def test_sse_reply_relays_the_last_data_frame(self):
+        body = (b'event: message\n'
+                b'data: {"jsonrpc":"2.0","id":1,"result":{"progress":1}}\n\n'
+                b'data: {"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"final"}]}}\n\n'
+                b'data: [DONE]\n\n')
+        McpRecorder.replies = [(200, "text/event-stream", body, {})]
+        r = self.run_mcp([self.REQ], KEMORY_API_KEY="k")
+        (reply,) = self.stdout_lines(r)
+        self.assertEqual(reply, {"jsonrpc": "2.0", "id": 1,
+                                 "result": {"tools": [{"name": "final"}]}})
+
+    def test_sse_reply_with_no_data_frame_answers_empty_reply(self):
+        McpRecorder.replies = [(200, "text/event-stream", b"data: [DONE]\n\n", {})]
+        r = self.run_mcp([self.REQ], KEMORY_API_KEY="k")
+        (reply,) = self.stdout_lines(r)
+        self.assertEqual(reply["id"], 1)
+        self.assertEqual(reply["error"]["code"], -32603)
+        self.assertIn("empty reply", reply["error"]["message"])
+
+    def test_batch_answers_with_one_array_of_due_replies(self):
+        members = [json.loads(self.REQ),
+                   json.loads(self.NOTIFICATION),
+                   {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}]
+        r = self.run_mcp([json.dumps(members)], KEMORY_API_KEY="k")
+        (batch,) = self.stdout_lines(r)
+        self.assertEqual([x["id"] for x in batch], [1, 2],
+                         "the notification adds no member to the answer")
+        self.assertEqual([body for _, body, _ in McpRecorder.requests], members)
+
+    def test_batch_of_only_notifications_writes_nothing(self):
+        members = [json.loads(self.NOTIFICATION)] * 2
+        r = self.run_mcp([json.dumps(members)], KEMORY_API_KEY="k")
+        self.assertEqual(r.stdout, "")
+        self.assertEqual(len(McpRecorder.requests), 2, "both are still relayed")
+
+    def test_404_drops_the_session_id(self):
+        McpRecorder.replies = [
+            (200, "application/json",
+             b'{"jsonrpc":"2.0","id":1,"result":{}}', {"Mcp-Session-Id": "sess-abc"}),
+            (404, "application/json", b'{"detail":"gone"}', {}),
+        ]
+        lines = [self.REQ.replace('"id":1', f'"id":{i}') for i in (1, 2, 3)]
+        r = self.run_mcp(lines, KEMORY_API_KEY="k")
+        second_request, third_request = McpRecorder.requests[1], McpRecorder.requests[2]
+        self.assertEqual(second_request[0].get("Mcp-Session-Id"), "sess-abc")
+        self.assertIsNone(third_request[0].get("Mcp-Session-Id"),
+                          "the server forgot the session, so it must not be sent again")
+        second = self.stdout_lines(r)[1]
+        self.assertEqual(second["id"], 2)
+        self.assertIn("HTTP 404", second["error"]["message"])
+
+    def test_non_json_reply_answers_in_band(self):
+        McpRecorder.replies = [(200, "application/json", b"<html>bad gateway</html>", {})]
+        r = self.run_mcp([self.REQ, self.REQ.replace('"id":1', '"id":2')],
+                         KEMORY_API_KEY="k")
+        first, second = self.stdout_lines(r)
+        self.assertEqual(first["id"], 1)
+        self.assertEqual(first["error"]["code"], -32603)
+        self.assertIn("non-JSON reply", first["error"]["message"])
+        self.assertEqual(second["id"], 2, "the bridge must keep serving")
+        self.assertIn("result", second)
+
+    def test_empty_reply_answers_in_band(self):
+        McpRecorder.replies = [(200, "application/json", b"", {})]
+        r = self.run_mcp([self.REQ], KEMORY_API_KEY="k")
+        (reply,) = self.stdout_lines(r)
+        self.assertEqual(reply["id"], 1)
+        self.assertIn("empty reply", reply["error"]["message"])
+
+    def test_202_reply_to_a_request_writes_nothing(self):
+        # Current behaviour: the 202 request gets no line at all, though a
+        # request is owed an answer.
+        McpRecorder.replies = [(202, "application/json", b"", {})]
+        r = self.run_mcp([self.REQ, self.REQ.replace('"id":1', '"id":2')],
+                         KEMORY_API_KEY="k")
+        (reply,) = self.stdout_lines(r)
+        self.assertEqual(reply["id"], 2)
+
+    def test_notification_with_http_error_gets_no_reply(self):
+        McpRecorder.status = 500
+        self.addCleanup(setattr, McpRecorder, "status", 200)
+        r = self.run_mcp([self.NOTIFICATION], KEMORY_API_KEY="k")
+        self.assertEqual(r.stdout, "")
+        self.assertEqual(len(McpRecorder.requests), 1)
+
+    def test_notification_to_unreachable_api_gets_no_reply(self):
+        r = self.run_mcp([self.NOTIFICATION], KEMORY_API_KEY="k",
+                         KEMORY_URL="http://127.0.0.1:1")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout, "")
+
+    def test_blank_host_line_is_skipped(self):
+        r = self.run_mcp(["", self.REQ], KEMORY_API_KEY="k")
+        (reply,) = self.stdout_lines(r)
+        self.assertEqual(reply["id"], 1)
+
+    def test_grok_signed_out_non_tool_call_answers_a_jsonrpc_error(self):
+        McpRecorder.status = 401
+        self.addCleanup(setattr, McpRecorder, "status", 200)
+        r = self.run_mcp([self.REQ], CLAUDE_PLUGIN_ROOT=self.grok_root())
+        (reply,) = self.stdout_lines(r)
+        self.assertNotIn("result", reply, "only a tool call answers as a tool error")
+        self.assertEqual(reply["error"]["code"], -32603)
+        self.assertIn("/kemory:login", reply["error"]["message"])
 
     def test_self_hosted_url_is_honoured(self):
         # KEMORY_URL is the one variable that repoints the whole plugin; the
@@ -3573,6 +3697,83 @@ class PrivacyDocTest(unittest.TestCase):
 
     def test_call_site_counter_ignores_command_v_curl(self):
         self.assertEqual(outbound_call_sites("command -v curl >/dev/null\ncurl -s x"), 1)
+
+
+SOURCE_PATTERN = re.compile(r"^\s*(?:source|\.)\s+(?!=)(\S+)", re.M)
+PY_FROM_IMPORT_PATTERN = re.compile(r"\bfrom\s+([A-Za-z_][\w.]*)\s+import\b")
+PY_IMPORT_PATTERN = re.compile(r"(?:^|[;'\"\s])import\s+([A-Za-z_][\w.]*(?:\s*,\s*[A-Za-z_][\w.]*)*)", re.M)
+EXEC_PATTERN = re.compile(r"\bexec\s+(?:python3\s+)?(\S+)")
+REPO_PATH_PATTERN = re.compile(r"(?<![\w.-])((?:\.\./)*(?:scripts|test)/[\w./-]+)")
+ALLOWED_IMPORTS = {"redact"}
+ALLOWED_EXEC_COMMANDS = {"kemory"}
+
+
+def plugin_dependency_violations(name, text, siblings):
+    """Dependencies of one plugin/scripts file that CLAUDE.md does not allow.
+
+    A file may source lib.sh, import the standard library and redact, exec a
+    sibling entry file (or the kemory CLI), and name no path in the repo's own
+    scripts/ or test/, which do not ship. `siblings` is the set of file names
+    in plugin/scripts, so `scripts/mcp.sh` in a comment is read as the plugin's.
+    """
+    found = []
+    for target in SOURCE_PATTERN.findall(text):
+        if target.strip("\"'").rsplit("/", 1)[-1] != "lib.sh":
+            found.append(f"{name}: sources {target}")
+    modules = set(PY_FROM_IMPORT_PATTERN.findall(text))
+    for group in PY_IMPORT_PATTERN.findall(PY_FROM_IMPORT_PATTERN.sub("", text)):
+        modules.update(part.strip() for part in group.split(","))
+    for module in sorted(modules):
+        top = module.split(".")[0]
+        if top not in sys.stdlib_module_names and top not in ALLOWED_IMPORTS:
+            found.append(f"{name}: imports {module}")
+    for target in EXEC_PATTERN.findall(text):
+        base = target.strip("\"'").rsplit("/", 1)[-1]
+        if base not in siblings and base not in ALLOWED_EXEC_COMMANDS:
+            found.append(f"{name}: execs {target}")
+    for path in REPO_PATH_PATTERN.findall(text):
+        base = path.rsplit("/", 1)[-1]
+        if path.startswith("test/") or path.startswith("../") or base not in siblings:
+            found.append(f"{name}: names {path}")
+    return found
+
+
+class PluginDependencyTest(unittest.TestCase):
+    def test_plugin_scripts_depend_only_on_what_ships(self):
+        paths = sorted(path for path in SCRIPTS.iterdir() if path.is_file())
+        siblings = {path.name for path in paths}
+        found = []
+        for path in paths:
+            found += plugin_dependency_violations(
+                path.name, path.read_text(errors="replace"), siblings)
+        self.assertEqual(found, [], f"plugin/scripts depends on code that does not ship: {found}")
+
+    def test_scanner_reports_a_source_of_another_file(self):
+        self.assertEqual(
+            plugin_dependency_violations("a.sh", '. "$DIR/../../scripts/check.sh"', set()),
+            ['a.sh: sources "$DIR/../../scripts/check.sh"', "a.sh: names ../../scripts/check.sh"])
+
+    def test_scanner_accepts_lib_sh(self):
+        self.assertEqual(plugin_dependency_violations("a.sh", '. "$DIR/lib.sh"', {"lib.sh"}), [])
+
+    def test_scanner_reports_a_third_party_import(self):
+        self.assertEqual(
+            plugin_dependency_violations("a.sh", "import json, requests\nfrom redact import redact", set()),
+            ["a.sh: imports requests"])
+
+    def test_scanner_reports_an_exec_of_another_file(self):
+        self.assertEqual(
+            plugin_dependency_violations("a.sh", 'exec python3 "$DIR/other.py"', {"login.py"}),
+            ['a.sh: execs "$DIR/other.py"'])
+
+    def test_scanner_accepts_an_exec_of_a_sibling(self):
+        self.assertEqual(
+            plugin_dependency_violations("a.sh", 'exec python3 "$DIR/login.py"', {"login.py"}), [])
+
+    def test_scanner_reports_a_test_path(self):
+        self.assertEqual(
+            plugin_dependency_violations("a.sh", "cat test/fixtures/x.json", set()),
+            ["a.sh: names test/fixtures/x.json"])
 
 
 if __name__ == "__main__":

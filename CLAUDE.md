@@ -78,9 +78,21 @@ shellcheck plugin/scripts/*.sh scripts/*.sh
 
 CI (`.github/workflows/check.yml`) runs these three. `check.sh` runs the test suite
 itself, so it takes a few minutes. Its "official manifest validation" step runs only
-when a `claude` CLI is on PATH, so CI skips it.
+when a `claude` CLI is on PATH, so CI skips it. In an agent sandbox the `claude` on
+PATH is a wrapper that rejects `claude plugin validate` (`unknown option '--model'`),
+so that step shows FAIL for both manifests even on a clean `main`. Compare against
+`main` before treating it as a regression.
+
+`python3 test/test_hooks.py` alone takes over 2 minutes. While iterating, run one class:
+`python3 test/test_hooks.py ClassName`.
 
 The tests start local HTTP servers on 127.0.0.1 and point `KEMORY_URL` at them. Some
 classes (`DuplicateServerTest`, `SkippedServerTest`) set `KEMORY_URL` to the hosted API
 host (`https://api.kemory.s9n.ai`) to test host matching. Do not add a test that needs
 a real network reply.
+
+A test that runs `status.sh` or `session-start.sh` must point `KEMORY_URL` at a local
+`Recorder` or a closed 127.0.0.1 port. Unset, it falls back to `KEMORY_DEFAULT_URL`
+(`lib.sh:16`) and curls the production API with a 6 s timeout. `kemory_retarget_url`
+(`lib.sh:68`) also rewrites the retired host `https://kemory.prod.apps.s9n.ai` to that
+production URL, so the retired host is no safe placeholder either.
