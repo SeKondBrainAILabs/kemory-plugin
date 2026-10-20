@@ -3486,8 +3486,9 @@ class ReleaseScriptTest(unittest.TestCase):
     def setUp(self):
         self.root = pathlib.Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.root)
-        for rel in ("CHANGELOG.md", ".claude-plugin/marketplace.json",
-                    "plugin/.claude-plugin/plugin.json", "plugin/.grok-plugin/plugin.json"):
+        for rel in ("CHANGELOG.md", ".claude-plugin/marketplace.json", ".cursor-plugin/marketplace.json",
+                    "plugin/.claude-plugin/plugin.json", "plugin/.grok-plugin/plugin.json",
+                    "plugins/cursor/.cursor-plugin/plugin.json"):
             (self.root / rel).parent.mkdir(parents=True, exist_ok=True)
             shutil.copy(ROOT / rel, self.root / rel)
         (self.root / "changes").mkdir()
@@ -3513,10 +3514,12 @@ class ReleaseScriptTest(unittest.TestCase):
         self.assertIn(f"## [{self.next}] — 2026-10-12\n\n### Changed\n- **A changed.**\n  Wrapped line.\n\n"
                       "### Fixed\n- **A fixed.**\n- **B fixed.** Detail.\n\n"
                       f"## [{self.version}]", changelog)
-        for rel in ("plugin/.claude-plugin/plugin.json", "plugin/.grok-plugin/plugin.json"):
+        for rel in ("plugin/.claude-plugin/plugin.json", "plugin/.grok-plugin/plugin.json",
+                    "plugins/cursor/.cursor-plugin/plugin.json"):
             self.assertEqual(json.loads((self.root / rel).read_text())["version"], self.next)
-        entries = json.loads((self.root / ".claude-plugin/marketplace.json").read_text())["plugins"]
-        self.assertEqual([e.get("version") for e in entries if e["name"] == "kemory"], [self.next])
+        for rel in (".claude-plugin/marketplace.json", ".cursor-plugin/marketplace.json"):
+            entries = json.loads((self.root / rel).read_text())["plugins"]
+            self.assertEqual([e.get("version") for e in entries if e["name"] == "kemory"], [self.next])
         self.assertEqual(sorted(p.name for p in (self.root / "changes").iterdir()), ["README.md"])
 
     def test_refuses_without_fragments(self):
@@ -3552,6 +3555,84 @@ class ReleaseScriptTest(unittest.TestCase):
         r = subprocess.run([sys.executable, str(ROOT / "scripts" / "release.py"), "--check"],
                            text=True, capture_output=True)
         self.assertEqual(r.returncode, 0, r.stdout)
+
+
+CURSOR = ROOT / "plugins" / "cursor"
+
+
+class CursorPluginTest(unittest.TestCase):
+    """plugins/cursor: hosted MCP entry, and hooks that hand off to `kemory hook`."""
+
+    HOOK = CURSOR / "scripts" / "kemory-hook.sh"
+    # The events kemory-cli's `connect --host cursor` writes
+    # (internal/hosts/cursorhooks.go). Keep the two lists together.
+    EVENTS = {"sessionStart": "session-start", "stop": "capture",
+              "preCompact": "capture", "sessionEnd": "capture"}
+
+    def setUp(self):
+        self.tmp = pathlib.Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp)
+
+    def fake_kemory(self, body):
+        bin_dir = self.tmp / "bin"
+        bin_dir.mkdir(exist_ok=True)
+        fake = bin_dir / "kemory"
+        fake.write_text("#!/usr/bin/env bash\n" + body)
+        fake.chmod(0o755)
+        return f"{bin_dir}:/usr/bin:/bin"
+
+    def run_hook(self, arg, path, payload='{"hook_event_name":"sessionStart"}'):
+        return subprocess.run(["bash", str(self.HOOK), arg], input=payload, text=True,
+                              capture_output=True, env={"PATH": path, "HOME": str(self.tmp)})
+
+    def test_silent_no_op_without_kemory_on_path(self):
+        for arg in ("session-start", "capture"):
+            with self.subTest(arg=arg):
+                r = self.run_hook(arg, "/usr/bin:/bin")
+                self.assertEqual((r.returncode, r.stdout, r.stderr), (0, "", ""))
+
+    def test_hands_the_payload_to_kemory_hook_for_cursor(self):
+        log = self.tmp / "call"
+        path = self.fake_kemory(f'echo "$*" > {log}; cat >> {log}; echo \'{{"additional_context":"ctx"}}\'\n')
+        r = self.run_hook("session-start", path, '{"x":1}')
+        self.assertEqual(r.returncode, 0)
+        self.assertEqual(json.loads(r.stdout), {"additional_context": "ctx"})
+        self.assertEqual(log.read_text(), '--env prod hook session-start --agent cursor\n{"x":1}')
+
+    def test_exits_zero_when_kemory_fails(self):
+        # Exit 2 from a Cursor hook blocks the action it is attached to.
+        path = self.fake_kemory("exit 2\n")
+        self.assertEqual(self.run_hook("capture", path).returncode, 0)
+
+    def test_runs_nothing_for_an_unknown_hook(self):
+        log = self.tmp / "call"
+        path = self.fake_kemory(f"touch {log}\n")
+        self.assertEqual(self.run_hook("store", path).returncode, 0)
+        self.assertFalse(log.exists())
+
+    def test_hooks_cover_the_events_kemory_connect_writes(self):
+        hooks = json.loads((CURSOR / "hooks" / "hooks.json").read_text())
+        self.assertEqual(hooks["version"], 1)
+        found = {}
+        for event, handlers in hooks["hooks"].items():
+            for h in handlers:
+                cmd = h["command"]
+                self.assertTrue(cmd.startswith('bash "${CURSOR_PLUGIN_ROOT}/scripts/kemory-hook.sh" '), cmd)
+                found[event] = cmd.rsplit(" ", 1)[1]
+        self.assertEqual(found, self.EVENTS)
+        self.assertTrue(os.access(self.HOOK, os.X_OK))
+
+    def test_mcp_entry_is_the_hosted_server_with_no_credential(self):
+        # Cursor signs in with OAuth itself; a header or env here would be a
+        # committed credential or an empty one.
+        servers = json.loads((CURSOR / "mcp.json").read_text())["mcpServers"]
+        self.assertEqual(servers, {"kemory": {"url": "https://api.kemory.s9n.ai/mcp/v1"}})
+
+    def test_skill_has_the_frontmatter_cursor_requires(self):
+        text = (CURSOR / "skills" / "kemory" / "SKILL.md").read_text()
+        front = text.split("---")[1]
+        self.assertIn("\nname: kemory\n", front)
+        self.assertIn("\ndescription: ", front)
 
 
 KEMORY_PATH_PATTERNS = (

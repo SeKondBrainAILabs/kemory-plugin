@@ -1,0 +1,17 @@
+{
+  "name": "kemory",
+  "owner": {
+    "name": "SeKondBrain"
+  },
+  "metadata": {
+    "description": "Official Kemory plugin for Cursor"
+  },
+  "plugins": [
+    {
+      "name": "kemory",
+      "source": "./plugins/cursor",
+      "description": "Persistent cross-session memory via Kemory: the hosted MCP server with browser sign-in, a skill for using memory well, and hooks that load context at session start and capture the session when the Kemory CLI is installed.",
+      "version": "0.16.0"
+    }
+  ]
+}

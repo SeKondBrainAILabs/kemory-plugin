@@ -19,8 +19,12 @@ import sys
 # The order sections appear in within a release.
 CATEGORIES = ("Upgrading", "Added", "Changed", "Fixed", "Removed", "Notes")
 VERSION = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
-MANIFESTS = ("plugin/.claude-plugin/plugin.json", "plugin/.grok-plugin/plugin.json")
-MARKETPLACE = ".claude-plugin/marketplace.json"
+MANIFESTS = (
+    "plugin/.claude-plugin/plugin.json",
+    "plugin/.grok-plugin/plugin.json",
+    "plugins/cursor/.cursor-plugin/plugin.json",
+)
+MARKETPLACES = (".claude-plugin/marketplace.json", ".cursor-plugin/marketplace.json")
 
 
 def fragments(root):
@@ -105,7 +109,8 @@ def release(root, version, date):
             if entry["name"] == "kemory":
                 entry["version"] = version
 
-    bump(root / MARKETPLACE, bump_entry)
+    for rel in MARKETPLACES:
+        bump(root / rel, bump_entry)
     for path in paths:
         path.unlink()
     return [p.name for p in paths]

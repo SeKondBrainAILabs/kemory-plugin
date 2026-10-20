@@ -66,10 +66,14 @@ echo "→ manifests agree on version"
 pver=$(jq -r '.version' plugin/.claude-plugin/plugin.json)
 gver=$(jq -r '.version' plugin/.grok-plugin/plugin.json)
 mver=$(jq -r '.plugins[0].version' .claude-plugin/marketplace.json)
+cver=$(jq -r '.version' plugins/cursor/.cursor-plugin/plugin.json)
+cmver=$(jq -r '.plugins[0].version' .cursor-plugin/marketplace.json)
 if [ "$pver" != "$gver" ]; then
   echo "  FAIL .claude-plugin $pver != .grok-plugin $gver"; fail=1
 elif [ "$pver" != "$mver" ]; then
   echo "  FAIL plugin.json $pver != marketplace.json $mver"; fail=1
+elif [ "$pver" != "$cver" ] || [ "$pver" != "$cmver" ]; then
+  echo "  FAIL plugin.json $pver != Cursor plugin.json $cver / Cursor marketplace.json $cmver"; fail=1
 elif ! printf '%s' "$pver" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
   # release.yml turns this into the tag name, so a non-semver value would
   # either produce a junk tag or fail the release after main has already moved.
