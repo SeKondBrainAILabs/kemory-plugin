@@ -3575,5 +3575,82 @@ class PrivacyDocTest(unittest.TestCase):
         self.assertEqual(outbound_call_sites("command -v curl >/dev/null\ncurl -s x"), 1)
 
 
+SOURCE_PATTERN = re.compile(r"^\s*(?:source|\.)\s+(?!=)(\S+)", re.M)
+PY_FROM_IMPORT_PATTERN = re.compile(r"\bfrom\s+([A-Za-z_][\w.]*)\s+import\b")
+PY_IMPORT_PATTERN = re.compile(r"(?:^|[;'\"\s])import\s+([A-Za-z_][\w.]*(?:\s*,\s*[A-Za-z_][\w.]*)*)", re.M)
+EXEC_PATTERN = re.compile(r"\bexec\s+(?:python3\s+)?(\S+)")
+REPO_PATH_PATTERN = re.compile(r"(?<![\w.-])((?:\.\./)*(?:scripts|test)/[\w./-]+)")
+ALLOWED_IMPORTS = {"redact"}
+ALLOWED_EXEC_COMMANDS = {"kemory"}
+
+
+def plugin_dependency_violations(name, text, siblings):
+    """Dependencies of one plugin/scripts file that CLAUDE.md does not allow.
+
+    A file may source lib.sh, import the standard library and redact, exec a
+    sibling entry file (or the kemory CLI), and name no path in the repo's own
+    scripts/ or test/, which do not ship. `siblings` is the set of file names
+    in plugin/scripts, so `scripts/mcp.sh` in a comment is read as the plugin's.
+    """
+    found = []
+    for target in SOURCE_PATTERN.findall(text):
+        if target.strip("\"'").rsplit("/", 1)[-1] != "lib.sh":
+            found.append(f"{name}: sources {target}")
+    modules = set(PY_FROM_IMPORT_PATTERN.findall(text))
+    for group in PY_IMPORT_PATTERN.findall(PY_FROM_IMPORT_PATTERN.sub("", text)):
+        modules.update(part.strip() for part in group.split(","))
+    for module in sorted(modules):
+        top = module.split(".")[0]
+        if top not in sys.stdlib_module_names and top not in ALLOWED_IMPORTS:
+            found.append(f"{name}: imports {module}")
+    for target in EXEC_PATTERN.findall(text):
+        base = target.strip("\"'").rsplit("/", 1)[-1]
+        if base not in siblings and base not in ALLOWED_EXEC_COMMANDS:
+            found.append(f"{name}: execs {target}")
+    for path in REPO_PATH_PATTERN.findall(text):
+        base = path.rsplit("/", 1)[-1]
+        if path.startswith("test/") or path.startswith("../") or base not in siblings:
+            found.append(f"{name}: names {path}")
+    return found
+
+
+class PluginDependencyTest(unittest.TestCase):
+    def test_plugin_scripts_depend_only_on_what_ships(self):
+        paths = sorted(path for path in SCRIPTS.iterdir() if path.is_file())
+        siblings = {path.name for path in paths}
+        found = []
+        for path in paths:
+            found += plugin_dependency_violations(
+                path.name, path.read_text(errors="replace"), siblings)
+        self.assertEqual(found, [], f"plugin/scripts depends on code that does not ship: {found}")
+
+    def test_scanner_reports_a_source_of_another_file(self):
+        self.assertEqual(
+            plugin_dependency_violations("a.sh", '. "$DIR/../../scripts/check.sh"', set()),
+            ['a.sh: sources "$DIR/../../scripts/check.sh"', "a.sh: names ../../scripts/check.sh"])
+
+    def test_scanner_accepts_lib_sh(self):
+        self.assertEqual(plugin_dependency_violations("a.sh", '. "$DIR/lib.sh"', {"lib.sh"}), [])
+
+    def test_scanner_reports_a_third_party_import(self):
+        self.assertEqual(
+            plugin_dependency_violations("a.sh", "import json, requests\nfrom redact import redact", set()),
+            ["a.sh: imports requests"])
+
+    def test_scanner_reports_an_exec_of_another_file(self):
+        self.assertEqual(
+            plugin_dependency_violations("a.sh", 'exec python3 "$DIR/other.py"', {"login.py"}),
+            ['a.sh: execs "$DIR/other.py"'])
+
+    def test_scanner_accepts_an_exec_of_a_sibling(self):
+        self.assertEqual(
+            plugin_dependency_violations("a.sh", 'exec python3 "$DIR/login.py"', {"login.py"}), [])
+
+    def test_scanner_reports_a_test_path(self):
+        self.assertEqual(
+            plugin_dependency_violations("a.sh", "cat test/fixtures/x.json", set()),
+            ["a.sh: names test/fixtures/x.json"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
