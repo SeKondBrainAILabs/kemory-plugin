@@ -1,0 +1,19 @@
+{
+  "name": "kemory",
+  "displayName": "Kemory",
+  "description": "Persistent cross-session memory via Kemory: the hosted MCP server with browser sign-in, a skill for using memory well, and hooks that load context at session start and capture the session when the Kemory CLI is installed.",
+  "version": "0.16.0",
+  "author": {
+    "name": "SeKondBrain"
+  },
+  "homepage": "https://github.com/SeKondBrainAILabs/kemory-plugin",
+  "repository": "https://github.com/SeKondBrainAILabs/kemory-plugin",
+  "license": "Apache-2.0",
+  "keywords": [
+    "memory",
+    "kemory",
+    "mcp",
+    "persistence",
+    "context"
+  ]
+}

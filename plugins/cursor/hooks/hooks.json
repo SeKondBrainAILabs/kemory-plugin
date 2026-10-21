@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "command": "bash \"${CURSOR_PLUGIN_ROOT}/scripts/kemory-hook.sh\" session-start",
+        "timeout": 10
+      }
+    ],
+    "stop": [
+      {
+        "command": "bash \"${CURSOR_PLUGIN_ROOT}/scripts/kemory-hook.sh\" capture",
+        "timeout": 10
+      }
+    ],
+    "preCompact": [
+      {
+        "command": "bash \"${CURSOR_PLUGIN_ROOT}/scripts/kemory-hook.sh\" capture",
+        "timeout": 10
+      }
+    ],
+    "sessionEnd": [
+      {
+        "command": "bash \"${CURSOR_PLUGIN_ROOT}/scripts/kemory-hook.sh\" capture",
+        "timeout": 10
+      }
+    ]
+  }
+}
