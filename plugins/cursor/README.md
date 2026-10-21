@@ -54,9 +54,5 @@ Cursor also loads plugins installed in Claude Code. If the Claude Code
   On an older CLI you get the MCP server and skill but no context at session
   start and no capture: update the CLI, or use `kemory connect --host cursor`,
   whose hooks live in `~/.cursor/hooks.json`, which the CLI reads.
-- **Sign-in needs a Kemory server release.** Cursor offers sign-in only when
-  a server refuses the connection. The plugin asks for that with
-  `?auth=required`. Until the server release that honours it is live, the
-  tools appear without sign-in and each call answers "Authentication required".
 - **Hooks need `bash`.** They run through `bash`, so on Windows they need Git
   Bash or WSL on `PATH`.
