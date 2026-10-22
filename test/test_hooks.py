@@ -3087,9 +3087,13 @@ class MuseTranscriptTest(unittest.TestCase):
         self.assertEqual((r.returncode, r.stdout), (0, ""))
 
     def test_store_nudge_looks_only_at_the_last_muse_turn(self):
-        earlier_stored = json.dumps({"sequence": 1, "payload": {"kind": "run", "event": {
+        # The write-tool record sits between two run-started records, so a turn
+        # that began at the first run-started record would swallow it.
+        stored = json.dumps({"sequence": 55, "payload": {"kind": "run", "event": {
             "kind": "tool_call", "name": "mcp__kemory__kemory_store_memory"}}}) + "\n"
-        self.lay_out_log("muse-1", lines=earlier_stored + self.LOG.read_text())
+        lines = self.LOG.read_text().splitlines(keepends=True)
+        lines.insert(5, stored)
+        self.lay_out_log("muse-1", lines="".join(lines))
         r = self.run_hook("store-nudge.sh", self.stop())
         self.assertIn("additionalContext", r.stdout)
 
