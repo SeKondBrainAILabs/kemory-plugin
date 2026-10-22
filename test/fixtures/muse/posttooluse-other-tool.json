@@ -1,0 +1,18 @@
+{
+  "hook_event_name": "PostToolUse",
+  "session_id": "muse-session-0001",
+  "cwd": "/Users/example/project",
+  "turn_id": "turn-0001",
+  "tool_name": "Bash",
+  "tool_input": {
+    "query": "example",
+    "limit": 1
+  },
+  "tool_use_id": "toolu_example",
+  "tool_response": [
+    {
+      "type": "text",
+      "text": "{\"results\": [1, 2], \"count\": 2}"
+    }
+  ]
+}

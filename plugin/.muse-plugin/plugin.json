@@ -1,0 +1,114 @@
+{
+  "schemaVersion": 1,
+  "name": "kemory",
+  "displayName": "Kemory",
+  "version": "0.16.0",
+  "description": "Persistent cross-session memory via Kemory: hooks that keep recall quality improving, a skill for using memory well, and session capture, on by default.",
+  "compat": {
+    "source": "native",
+    "manifestDir": ".muse-plugin"
+  },
+  "capabilities": {
+    "skills": [
+      {
+        "id": "kemory",
+        "path": "skills/kemory/SKILL.md",
+        "enabledDefault": true
+      },
+      {
+        "id": "kemory-setup",
+        "path": "skills/setup/SKILL.md",
+        "enabledDefault": true
+      }
+    ],
+    "commands": [
+      {
+        "id": "login",
+        "path": "commands/login.md",
+        "enabledDefault": true
+      },
+      {
+        "id": "status",
+        "path": "commands/status.md",
+        "enabledDefault": true
+      }
+    ],
+    "hooks": [
+      {
+        "id": "session-start",
+        "event": "SessionStart",
+        "command": [
+          "bash",
+          "scripts/session-start.sh"
+        ],
+        "timeoutMs": 15000,
+        "statusMessage": "Loading Kemory memory context..."
+      },
+      {
+        "id": "prompt-recall",
+        "event": "UserPromptSubmit",
+        "command": [
+          "bash",
+          "scripts/prompt-recall.sh"
+        ],
+        "timeoutMs": 10000
+      },
+      {
+        "id": "rate-reminder",
+        "event": "PostToolUse",
+        "command": [
+          "bash",
+          "scripts/rate-reminder.sh"
+        ],
+        "timeoutMs": 10000
+      },
+      {
+        "id": "capture-stop",
+        "event": "Stop",
+        "command": [
+          "bash",
+          "scripts/capture.sh"
+        ],
+        "timeoutMs": 15000
+      },
+      {
+        "id": "store-nudge",
+        "event": "Stop",
+        "command": [
+          "bash",
+          "scripts/store-nudge.sh"
+        ],
+        "timeoutMs": 10000
+      },
+      {
+        "id": "capture-precompact",
+        "event": "PreCompact",
+        "command": [
+          "bash",
+          "scripts/capture.sh"
+        ],
+        "timeoutMs": 15000
+      },
+      {
+        "id": "capture-session-end",
+        "event": "SessionEnd",
+        "command": [
+          "bash",
+          "scripts/capture.sh"
+        ],
+        "timeoutMs": 15000
+      }
+    ],
+    "mcpServers": [
+      {
+        "id": "kemory",
+        "transport": "stdio",
+        "command": [
+          "bash",
+          "scripts/mcp.sh"
+        ]
+      }
+    ],
+    "reminders": []
+  }
+}

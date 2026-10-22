@@ -65,11 +65,14 @@ done < <(find . -name 'marketplace.json' -not -path './.git/*')
 echo "→ manifests agree on version"
 pver=$(jq -r '.version' plugin/.claude-plugin/plugin.json)
 gver=$(jq -r '.version' plugin/.grok-plugin/plugin.json)
+muver=$(jq -r '.version' plugin/.muse-plugin/plugin.json)
 mver=$(jq -r '.plugins[0].version' .claude-plugin/marketplace.json)
 cver=$(jq -r '.version' plugins/cursor/.cursor-plugin/plugin.json)
 cmver=$(jq -r '.plugins[0].version' .cursor-plugin/marketplace.json)
 if [ "$pver" != "$gver" ]; then
   echo "  FAIL .claude-plugin $pver != .grok-plugin $gver"; fail=1
+elif [ "$pver" != "$muver" ]; then
+  echo "  FAIL .claude-plugin $pver != .muse-plugin $muver"; fail=1
 elif [ "$pver" != "$mver" ]; then
   echo "  FAIL plugin.json $pver != marketplace.json $mver"; fail=1
 elif [ "$pver" != "$cver" ] || [ "$pver" != "$cmver" ]; then

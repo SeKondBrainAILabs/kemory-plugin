@@ -22,6 +22,7 @@ VERSION = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
 MANIFESTS = (
     "plugin/.claude-plugin/plugin.json",
     "plugin/.grok-plugin/plugin.json",
+    "plugin/.muse-plugin/plugin.json",
     "plugins/cursor/.cursor-plugin/plugin.json",
 )
 MARKETPLACES = (".claude-plugin/marketplace.json", ".cursor-plugin/marketplace.json")
