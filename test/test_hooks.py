@@ -3007,12 +3007,20 @@ class MuseTranscriptTest(unittest.TestCase):
         self.assertEqual((r.returncode, r.stdout), (0, ""))
         self.assertEqual(Recorder.posts, [])
 
-    def test_capture_rejects_session_id_with_path_characters(self):
+    def lay_out_decoys(self):
+        """Logs that a session id holding path characters would reach through the glob."""
         self.lay_out_log("muse-1")
-        outside = pathlib.Path(self.home) / ".local/share/muse/sessions/x/session.jsonl"
-        outside.parent.mkdir(parents=True)
-        outside.write_text(self.LOG.read_text())
-        for sid in ("../../x", "a/b", "muse-1/..", "muse*", "x" * 65, "muse-1\n"):
+        sessions = pathlib.Path(self.home) / ".local/share/muse/sessions"
+        for rel in ("2026/x", "2026/10/20/a/b", "2026/10/20"):
+            d = sessions / rel
+            d.mkdir(parents=True, exist_ok=True)
+            (d / "session.jsonl").write_text(self.LOG.read_text())
+
+    BAD_IDS = ("../../x", "a/b", "muse-1/..", "muse*", "x" * 65, "muse-1\n")
+
+    def test_capture_rejects_session_id_with_path_characters(self):
+        self.lay_out_decoys()
+        for sid in self.BAD_IDS:
             with self.subTest(session_id=sid):
                 r = self.run_hook("capture.sh", self.stop(session_id=sid))
                 self.assertEqual((r.returncode, r.stdout), (0, ""))
@@ -3060,6 +3068,30 @@ class MuseTranscriptTest(unittest.TestCase):
         self.lay_out_log("muse-1", lines=stored)
         r = self.run_hook("store-nudge.sh", self.stop())
         self.assertEqual((r.returncode, r.stdout), (0, ""))
+
+    def test_store_nudge_rejects_session_id_with_path_characters(self):
+        self.lay_out_decoys()
+        for sid in self.BAD_IDS:
+            with self.subTest(session_id=sid):
+                r = self.run_hook("store-nudge.sh", self.stop(session_id=sid))
+                self.assertEqual((r.returncode, r.stdout), (0, ""))
+
+    def test_store_nudge_uses_newest_session_log(self):
+        signal = json.dumps({"sequence": 1, "payload": {"kind": "run", "event": {
+            "kind": "started", "prompt": "From now on we use postgres."}}}) + "\n"
+        older = self.lay_out_log("muse-1", day="2026/10/19", lines=signal)
+        os.utime(older, (1, 1))
+        quiet = signal.replace("From now on we use postgres.", "which queue?")
+        self.lay_out_log("muse-1", lines=quiet)
+        r = self.run_hook("store-nudge.sh", self.stop())
+        self.assertEqual((r.returncode, r.stdout), (0, ""))
+
+    def test_store_nudge_looks_only_at_the_last_muse_turn(self):
+        earlier_stored = json.dumps({"sequence": 1, "payload": {"kind": "run", "event": {
+            "kind": "tool_call", "name": "mcp__kemory__kemory_store_memory"}}}) + "\n"
+        self.lay_out_log("muse-1", lines=earlier_stored + self.LOG.read_text())
+        r = self.run_hook("store-nudge.sh", self.stop())
+        self.assertIn("additionalContext", r.stdout)
 
     def test_store_nudge_without_muse_plugin_root_does_not_search(self):
         self.lay_out_log("muse-1")
