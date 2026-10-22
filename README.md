@@ -5,10 +5,12 @@ Persistent, cross-session memory for coding agents, powered by
 open-source [community edition](https://github.com/SeKondBrainAILabs/kemory-community).
 
 One plugin, one tree, a manifest per host: `.claude-plugin/plugin.json` for
-Claude Code and `.grok-plugin/plugin.json` for Grok Build, both carrying the
-same version. It installs and runs on both today; the Grok Build catalog entry
-is in review, so for now Grok installs it from this repository
-([Grok Build](#grok-build)).
+Claude Code, `.grok-plugin/plugin.json` for Grok Build and
+`.muse-plugin/plugin.json` for Muse Code, all carrying the same version. It
+installs on all three; the Grok Build catalog entry is in review, so for now
+Grok installs it from this repository ([Grok Build](#grok-build)). Muse Code
+has its own steps ([Muse Code](#muse-code)), and session capture does not run
+there yet.
 
 An MCP server gives an agent memory *tools*. This plugin makes it actually use
 them: relevant memories arrive under every prompt, a turn that settles
@@ -42,7 +44,7 @@ is an optional add-on that shows that memory in Claude Code's interface.
 |---|---|---|
 | What it is | Memory: the MCP server, hooks and skills | Kemory in Claude Code's interface |
 | What you get | The Kemory tools, prompt recall, session context, rate reminder, session capture, `/kemory:login`, `/kemory:status` | A status line that says whether Kemory works, the memories in context above the prompt, a card on each save and recall in the terminal, the `/kemory-panel:memories` panel (rate, delete, save the last reply, suggest memories), `/kemory-panel:remember`, `/kemory-panel:learned`, and auto-approval of read-only Kemory tools |
-| Runs on | Claude Code and Grok Build | Claude Code 2.1.267 and later; older builds and Grok ignore it |
+| Runs on | Claude Code, Grok Build and Muse Code | Claude Code 2.1.267 and later; older builds and Grok ignore it |
 | Needs | A Kemory account | `kemory`, whose server and credential it uses |
 | Source | This repository | [kemory-panel](https://github.com/SeKondBrainAILabs/kemory-panel) |
 
@@ -132,6 +134,33 @@ Kemory server ends up disabled there, it is listed in `disabled_mcp_servers` in
 list and restart Grok to get the tools back. To remove Kemory altogether, run
 `grok plugin uninstall kemory`.
 
+### Muse Code
+
+From the marketplace:
+
+```
+muse plugins marketplace add kemory https://github.com/SeKondBrainAILabs/kemory-plugin
+muse plugins install kemory@kemory
+muse plugins approve kemory
+```
+
+Or from a clone of this repository:
+
+```
+muse plugins install ./plugin --scope user
+muse plugins approve kemory
+```
+
+Restart any running Muse session, then sign in with `kemory login` from a
+terminal or with `/kemory:login`.
+
+Session capture and the store reminder do not run under Muse yet.
+
+Muse starts the hooks and the memory server with a cleared environment, so
+`KEMORY_URL`, `KEMORY_API_KEY` and other `KEMORY_*` settings in your shell do
+not reach them. Sign in with the credential file that `kemory login` writes;
+a self-hosted instance is reached through the URL that file records.
+
 ### Which surface you are on
 
 **Claude Code** and **Claude Desktop** are different products, and only one of
@@ -162,7 +191,7 @@ including why it should not be combined with `kemory connect --host cursor`.
 
 ### Other tools
 
-This plugin runs where a host loads plugin hooks: Claude Code and Grok Build.
+This plugin runs where a host loads plugin hooks: Claude Code, Grok Build and Muse Code.
 Codex, Claude Desktop and other MCP clients do not load these hooks,
 so they get Kemory's memory *tools* over MCP, without prompt recall, capture
 or the in-app panel:
@@ -288,6 +317,7 @@ script plus shellcheck. See [CONTRIBUTING.md](CONTRIBUTING.md).
 plugin/
 ├── .claude-plugin/plugin.json
 ├── .grok-plugin/plugin.json
+├── .muse-plugin/plugin.json
 ├── .mcp.json                     bundled MCP entry → scripts/mcp.sh
 ├── hooks/hooks.json
 ├── commands/login.md             /kemory:login

@@ -71,7 +71,9 @@ fi
 #
 # Loudly. A server that starts and exposes nothing reads as connected in /mcp
 # with every tool missing, which is the failure this whole file exists to avoid.
-if [ "${KEMORY_ALLOW_DUPLICATE:-0}" != "1" ]; then
+# Muse does not load Claude Code's ~/.claude.json or ./.mcp.json, which is all
+# this check reads, so there it would stand down for a server Muse never starts.
+if [ "${KEMORY_ALLOW_DUPLICATE:-0}" != "1" ] && [ -z "${MUSE_PLUGIN_ROOT:-}" ]; then
   duplicate="$(kemory_find_duplicate_server)"
   if [ -n "$duplicate" ]; then
     name="${duplicate%%	*}"

@@ -14,7 +14,7 @@ input="$(cat)"
 command -v python3 >/dev/null 2>&1 || exit 0
 
 read -r recall_id count <<< "$(printf '%s' "$input" | python3 -c '
-import json, sys
+import json, os, re, sys
 
 def out(rid, n):
     print(rid or "unknown", n)
@@ -51,6 +51,15 @@ try:
     d = json.load(sys.stdin)
 except Exception:
     out(None, 0)
+
+# Muse has no hook matcher, so every PostToolUse reaches this script. Apply
+# the PostToolUse matcher of hooks/hooks.json here, copied verbatim; a payload
+# without a string tool_name cannot be shown to be a recall.
+if os.environ.get("MUSE_PLUGIN_ROOT"):
+    name = d.get("tool_name") if isinstance(d, dict) else None
+    if not isinstance(name, str) or not re.match(
+            r"(mcp__.*__|[A-Za-z0-9-]+__)kemory_(recall.*|ask|find_similar|get_.*)", name):
+        out(None, 0)
 
 r = unwrap(d.get("tool_response"))
 if r is None:

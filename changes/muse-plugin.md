@@ -1,0 +1,2 @@
+### Added
+- **Muse Code can install the plugin.** `.muse-plugin/plugin.json` brings the `kemory` skill, `/kemory:login` and `/kemory:status`, the hooks and the memory server. The manifest carries the same version as the Claude Code and Grok Build ones. Under Muse the rate reminder fires only after a Kemory recall tool, and the memory server no longer stands down for an entry in Claude Code's config, which Muse does not read.

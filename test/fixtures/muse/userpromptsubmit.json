@@ -1,0 +1,7 @@
+{
+  "hook_event_name": "UserPromptSubmit",
+  "session_id": "muse-session-0001",
+  "cwd": "/Users/example/project",
+  "turn_id": "turn-0001",
+  "prompt": "why did we choose hybrid search over fts for recall?"
+}

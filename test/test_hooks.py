@@ -3488,7 +3488,7 @@ class ReleaseScriptTest(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.root)
         for rel in ("CHANGELOG.md", ".claude-plugin/marketplace.json", ".cursor-plugin/marketplace.json",
                     "plugin/.claude-plugin/plugin.json", "plugin/.grok-plugin/plugin.json",
-                    "plugins/cursor/.cursor-plugin/plugin.json"):
+                    "plugin/.muse-plugin/plugin.json", "plugins/cursor/.cursor-plugin/plugin.json"):
             (self.root / rel).parent.mkdir(parents=True, exist_ok=True)
             shutil.copy(ROOT / rel, self.root / rel)
         (self.root / "changes").mkdir()
@@ -3521,6 +3521,13 @@ class ReleaseScriptTest(unittest.TestCase):
             entries = json.loads((self.root / rel).read_text())["plugins"]
             self.assertEqual([e.get("version") for e in entries if e["name"] == "kemory"], [self.next])
         self.assertEqual(sorted(p.name for p in (self.root / "changes").iterdir()), ["README.md"])
+
+    def test_release_bumps_muse_manifest(self):
+        self.fragment("a.md", "### Fixed\n- x\n")
+        r = self.run_release(self.next)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        muse = json.loads((self.root / "plugin/.muse-plugin/plugin.json").read_text())
+        self.assertEqual(muse["version"], self.next)
 
     def test_refuses_without_fragments(self):
         r = self.run_release(self.next)
@@ -3635,6 +3642,225 @@ class CursorPluginTest(unittest.TestCase):
         front = text.split("---")[1]
         self.assertIn("\nname: kemory\n", front)
         self.assertIn("\ndescription: ", front)
+
+
+MUSE = ROOT / "plugin" / ".muse-plugin"
+MUSE_FIXTURES = ROOT / "test" / "fixtures" / "muse"
+MUSE_EVENTS = {"SessionStart", "UserPromptSubmit", "PostToolUse", "Stop", "PreCompact", "SessionEnd"}
+
+
+class MusePluginTest(unittest.TestCase):
+    """plugin/.muse-plugin: the Muse Code manifest, and the scripts run the way Muse runs them.
+
+    No Muse documentation was available, so every Muse fact here is a public
+    measurement, not a contract:
+    - supermemoryai/muse-supermemory, .muse-plugin/plugin.json: the manifest
+      shape (schemaVersion, compat, capabilities, plugin-relative argv), the
+      nested hookSpecificOutput.additionalContext output, `prompt` on the
+      UserPromptSubmit payload.
+    - nandinhos/antigravity-clearer-engineering-harness,
+      docs/temp_implementation/evidence/host-probe/muse/20260930T001955Z/summary.md:
+      Muse 1.4.1 hook payloads carry hook_event_name, session_id, cwd and
+      turn_id; hooks see MUSE_PLUGIN_ROOT, MUSE_PLUGIN_ID, MUSE_PLUGIN_DATA_DIR.
+    - receptron/mulmoterminal, server/session/bridge-session.ts: the MCP
+      server gets a curated environment (MUSE_PLUGIN_ROOT, PATH, HOME, TMPDIR).
+    - duck8823/traceary, docs/integrations/muse-lifecycle.md: the hook event
+      names.
+    Muse hooks have no matcher field, so every PostToolUse reaches the script.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.srv = http.server.HTTPServer(("127.0.0.1", 0), Recorder)
+        cls.port = cls.srv.server_address[1]
+        threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.srv.shutdown()
+
+    def setUp(self):
+        reset_recorder()
+        self.home = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.home, ignore_errors=True)
+        self.manifest = json.loads((MUSE / "plugin.json").read_text())
+        self.mine = f"http://127.0.0.1:{self.port}"
+        d = pathlib.Path(self.home) / ".kemory"
+        d.mkdir()
+        (d / "credentials-prod").write_text(json.dumps({
+            "access_token": "tok", "refresh_token": "ref",
+            "expires_at": time.time() + 3600, "client_id": "kemory-cli",
+            "issuer": "https://issuer.invalid/realms/x",
+            "kemory_url": self.mine, "env": "prod", "version": 2}))
+
+    def muse_env(self, muse=True):
+        """Only what Muse passes: no KEMORY_* and no kemory CLI on PATH."""
+        path = ":".join(d for d in os.environ.get("PATH", "").split(":")
+                        if not (pathlib.Path(d) / "kemory").exists())
+        env = {"PATH": path, "HOME": self.home, "TMPDIR": self.home}
+        if muse:
+            env.update({"MUSE_PLUGIN_ROOT": str(ROOT / "plugin"), "MUSE_PLUGIN_ID": "kemory@kemory",
+                        "MUSE_PLUGIN_DATA_DIR": str(pathlib.Path(self.home) / "data")})
+        return env
+
+    def fixture(self, name):
+        return json.loads((MUSE_FIXTURES / name).read_text())
+
+    def run_muse(self, script, payload, muse=True):
+        return subprocess.run(["bash", str(SCRIPTS / script)], input=json.dumps(payload),
+                              text=True, capture_output=True, env=self.muse_env(muse))
+
+    def test_manifest_parses_with_schema_version_1_and_native_compat(self):
+        m = self.manifest
+        claude = json.loads((ROOT / "plugin/.claude-plugin/plugin.json").read_text())
+        self.assertEqual(m["schemaVersion"], 1)
+        self.assertEqual((m["name"], m["displayName"]), ("kemory", "Kemory"))
+        self.assertEqual(m["description"], claude["description"])
+        self.assertEqual(m["compat"], {"source": "native", "manifestDir": ".muse-plugin"})
+        self.assertEqual(sorted(m["capabilities"]),
+                         ["commands", "hooks", "mcpServers", "reminders", "skills"])
+        self.assertEqual(m["capabilities"]["reminders"], [])
+        self.assertEqual(m["capabilities"]["mcpServers"],
+                         [{"id": "kemory", "transport": "stdio", "command": ["bash", "scripts/mcp.sh"]}])
+        for kind in ("skills", "commands"):
+            for entry in m["capabilities"][kind]:
+                self.assertIs(entry["enabledDefault"], True)
+
+    def test_skill_and_command_ids_match_their_files(self):
+        caps = self.manifest["capabilities"]
+        self.assertEqual({e["path"]: e["id"] for e in caps["skills"]},
+                         {"skills/kemory/SKILL.md": "kemory", "skills/setup/SKILL.md": "kemory-setup"})
+        self.assertEqual({e["path"]: e["id"] for e in caps["commands"]},
+                         {"commands/login.md": "login", "commands/status.md": "status"})
+        for e in caps["skills"]:
+            front = (ROOT / "plugin" / e["path"]).read_text().split("---")[1]
+            self.assertIn(f"\nname: {e['id']}\n", front)
+
+    def test_every_capability_path_exists(self):
+        caps = self.manifest["capabilities"]
+        for kind in ("skills", "commands"):
+            for e in caps[kind]:
+                with self.subTest(path=e["path"]):
+                    self.assertTrue((ROOT / "plugin" / e["path"]).is_file())
+
+    def test_hook_and_mcp_commands_name_executable_scripts(self):
+        caps = self.manifest["capabilities"]
+        argvs = [h["command"] for h in caps["hooks"]] + [s["command"] for s in caps["mcpServers"]]
+        self.assertEqual(len(caps["hooks"]), 7)
+        for argv in argvs:
+            for arg in argv:
+                if arg.endswith(".sh"):
+                    with self.subTest(arg=arg):
+                        script = ROOT / "plugin" / arg
+                        self.assertTrue(script.is_file())
+                        self.assertTrue(os.access(script, os.X_OK))
+
+    def test_version_matches_claude_and_grok_manifests(self):
+        for rel in ("plugin/.claude-plugin/plugin.json", "plugin/.grok-plugin/plugin.json"):
+            with self.subTest(manifest=rel):
+                self.assertEqual(self.manifest["version"],
+                                 json.loads((ROOT / rel).read_text())["version"])
+
+    def test_events_and_scripts_match_hooks_json(self):
+        hooks = json.loads((ROOT / "plugin/hooks/hooks.json").read_text())["hooks"]
+        expected = sorted(
+            (event, h["command"].replace("${CLAUDE_PLUGIN_ROOT}/", ""))
+            for event, groups in hooks.items() for g in groups for h in g["hooks"])
+        found = sorted((h["event"], h["command"][1]) for h in self.manifest["capabilities"]["hooks"])
+        self.assertEqual(found, expected)
+        for h in self.manifest["capabilities"]["hooks"]:
+            self.assertEqual(h["command"][0], "bash")
+
+    def test_every_muse_event_has_a_fixture(self):
+        # *.json only: session.jsonl sits in the same directory.
+        fixtures = [json.loads(p.read_text()) for p in sorted(MUSE_FIXTURES.glob("*.json"))]
+        for f in fixtures:
+            self.assertIn(f["hook_event_name"], MUSE_EVENTS)
+            for key in ("session_id", "cwd", "turn_id"):
+                self.assertIn(key, f)
+        self.assertEqual({h["event"] for h in self.manifest["capabilities"]["hooks"]},
+                         {f["hook_event_name"] for f in fixtures})
+
+    def test_session_start_under_muse_env_injects_context(self):
+        Recorder.get_payload = {"namespaces": [
+            {"namespace": "user:preferences", "summary": "Prefers concise answers."}]}
+        r = self.run_muse("session-start.sh", self.fixture("sessionstart.json"))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        out = json.loads(r.stdout)["hookSpecificOutput"]
+        self.assertIn("user:preferences", out["additionalContext"])
+
+    def test_prompt_recall_under_muse_env_injects_recall(self):
+        Recorder.search_payload = {"items": [{"memory_id": "mem-1", "namespace": "shared",
+                                              "content": "hybrid beat fts"}], "total": 1}
+        r = self.run_muse("prompt-recall.sh", self.fixture("userpromptsubmit.json"))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("hybrid beat fts", json.loads(r.stdout)["hookSpecificOutput"]["additionalContext"])
+        self.assertTrue(any(p.endswith("/memories/search") for _, _, p in Recorder.posts))
+
+    def test_rate_reminder_under_muse_env_fires_for_a_recall(self):
+        r = self.run_muse("rate-reminder.sh", self.fixture("posttooluse.json"))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("rc_0123456789abcdef0123456789abcdef",
+                      json.loads(r.stdout)["hookSpecificOutput"]["additionalContext"])
+
+    def test_rate_reminder_under_muse_env_silent_for_another_tool(self):
+        payload = self.fixture("posttooluse-other-tool.json")
+        r = self.run_muse("rate-reminder.sh", payload)
+        self.assertEqual((r.returncode, r.stdout), (0, ""))
+        # The same payload outside Muse still reminds, so the tool_name check
+        # is what keeps it quiet.
+        r = self.run_muse("rate-reminder.sh", payload, muse=False)
+        self.assertIn("Reminder", r.stdout)
+
+    def test_rate_reminder_under_muse_env_silent_without_a_string_tool_name(self):
+        base = self.fixture("posttooluse.json")
+        for name in (None, 7, ["mcp__kemory__kemory_recall"]):
+            with self.subTest(tool_name=name):
+                r = self.run_muse("rate-reminder.sh", {**base, "tool_name": name})
+                self.assertEqual((r.returncode, r.stdout), (0, ""))
+        del base["tool_name"]
+        self.assertEqual(self.run_muse("rate-reminder.sh", base).stdout, "")
+
+    def test_rate_reminder_under_muse_env_follows_hooks_json_matcher(self):
+        hooks = json.loads((ROOT / "plugin" / "hooks" / "hooks.json").read_text())
+        matcher = hooks["hooks"]["PostToolUse"][0]["matcher"]
+        # The tools of test_hook_matcher_covers_recall_family and
+        # test_rate_reminder_matcher_excludes_writes.
+        tools = ("recall", "recall_memory", "get_context", "ask", "find_similar", "get_compressed",
+                 "get_raw", "get_session_context", "get_namespace_summary", "memory", "store_memory",
+                 "store_skill", "delete_memory", "forget", "rate_memory", "consolidate_session")
+        base = self.fixture("posttooluse.json")
+        seen = set()
+        for tool in tools:
+            for prefix in ("mcp__kemory__", "kemory__"):
+                name = f"{prefix}kemory_{tool}"
+                with self.subTest(name=name):
+                    want = re.match(matcher, name) is not None
+                    seen.add(want)
+                    r = self.run_muse("rate-reminder.sh", {**base, "tool_name": name})
+                    self.assertEqual(r.returncode, 0, r.stderr)
+                    self.assertEqual("Reminder" in r.stdout, want)
+        self.assertEqual(seen, {True, False})
+
+    def write_claude_config_entry(self):
+        (pathlib.Path(self.home) / ".claude.json").write_text(json.dumps(
+            {"mcpServers": {"kemory": {"type": "http", "url": f"{self.mine}/mcp/v1"}}}))
+
+    def launch_mcp(self, muse):
+        return subprocess.run(["bash", str(SCRIPTS / "mcp.sh")], input="", text=True,
+                              capture_output=True, env=self.muse_env(muse))
+
+    def test_mcp_under_muse_env_serves_despite_claude_config_entry(self):
+        self.write_claude_config_entry()
+        r = self.launch_mcp(muse=True)
+        self.assertNotIn("standing down", r.stderr)
+        self.assertEqual(r.returncode, 0, r.stderr)
+
+    def test_mcp_without_muse_env_still_stands_down_for_claude_config_entry(self):
+        self.write_claude_config_entry()
+        r = self.launch_mcp(muse=False)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("standing down", r.stderr)
 
 
 KEMORY_PATH_PATTERNS = (
