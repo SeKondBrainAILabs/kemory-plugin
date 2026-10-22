@@ -7,9 +7,10 @@ open-source [community edition](https://github.com/SeKondBrainAILabs/kemory-comm
 One plugin, one tree, a manifest per host: `.claude-plugin/plugin.json` for
 Claude Code, `.grok-plugin/plugin.json` for Grok Build and
 `.muse-plugin/plugin.json` for Muse Code, all carrying the same version. It
-installs and runs on all three today; the Grok Build catalog entry is in
-review, so for now Grok installs it from this repository
-([Grok Build](#grok-build)). Muse Code: [Muse Code](#muse-code).
+installs on all three; the Grok Build catalog entry is in review, so for now
+Grok installs it from this repository ([Grok Build](#grok-build)). Muse Code
+has its own steps ([Muse Code](#muse-code)), and session capture does not run
+there yet.
 
 An MCP server gives an agent memory *tools*. This plugin makes it actually use
 them: relevant memories arrive under every prompt, a turn that settles
@@ -150,8 +151,10 @@ muse plugins install ./plugin --scope user
 muse plugins approve kemory
 ```
 
-Restart any running Muse session, then sign in with `/kemory:login` or, from a
-terminal, `kemory login`.
+Restart any running Muse session, then sign in with `kemory login` from a
+terminal or with `/kemory:login`.
+
+Session capture and the store reminder do not run under Muse yet.
 
 Muse starts the hooks and the memory server with a cleared environment, so
 `KEMORY_URL`, `KEMORY_API_KEY` and other `KEMORY_*` settings in your shell do
