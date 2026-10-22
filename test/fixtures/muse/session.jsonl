@@ -1,0 +1,8 @@
+{"sequence": 1, "payload": {"kind": "session", "event": {"kind": "opened", "cwd": "/work/app"}}}
+{"sequence": 2, "payload": {"kind": "run", "event": {"kind": "started", "prompt": "add retries to the uploader"}}}
+{"sequence": 3, "payload": {"kind": "run", "event": {"kind": "assistant_message_committed", "text": "Retries added with exponential backoff."}}}
+{"sequence": 4, "payload": {"kind": "run", "event": {"kind": "started", "prompt": "<system-reminder>Plan mode is active.</system-reminder>"}}}
+{"sequence": 5, "payload": {"kind": "run", "event": {"kind": "started", "prompt": "rename the config flag to upload_retries"}}}
+{"sequence": 6, "payload": {"kind": "run", "event": {"kind": "assistant_message_committed", "text": "Renamed the flag in three files."}}}
+{"sequence": 7, "payload": {"kind": "run", "event": {"kind": "started", "prompt": "redis or postgres for the queue?"}}}
+{"sequence": 8, "payload": {"kind": "run", "event": {"kind": "assistant_message_committed", "text": "We'll use postgres: one writer, no extra failure domain."}}}

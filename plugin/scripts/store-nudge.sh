@@ -25,7 +25,7 @@ export PYTHONDONTWRITEBYTECODE=1
 export KEMORY_NUDGE_SIGNALS="${KEMORY_STORE_NUDGE_SIGNALS:-}"
 
 python3 <<'PY' 2>/dev/null
-import hashlib, json, os, re, sys
+import glob, hashlib, json, os, re, sys
 
 # Phrases that mark a turn as having settled something worth keeping. Kept
 # deliberately narrow: every entry here is a phrase that states a conclusion,
@@ -75,6 +75,24 @@ if hook.get("stop_hook_active"):
     die()
 
 transcript = hook.get("transcript_path") or ""
+
+
+def muse_session_log(sid):
+    """Newest Muse session log for this id, or "" (Muse sends no transcript_path).
+
+    Only under Muse, and only for a plain id, so a hostile session_id cannot
+    steer the glob out of Muse's sessions directory.
+    """
+    if not os.environ.get("MUSE_PLUGIN_ROOT") or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", sid):
+        return ""
+    base = os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
+    found = glob.glob(os.path.join(
+        glob.escape(base), "muse", "sessions", "*", "*", "*", sid, "session.jsonl"))
+    return max(found, key=os.path.getmtime) if found else ""
+
+
+if not transcript or not os.path.isfile(transcript):
+    transcript = muse_session_log(hook.get("session_id") or "")
 if not transcript or not os.path.isfile(transcript):
     die()
 
@@ -106,34 +124,68 @@ def text_of(ev):
                     if isinstance(b, dict) and b.get("type") == "text")
 
 
-# Only this turn is in scope: everything after the last real user message.
-start = 0
-for i, ev in enumerate(events):
-    if ev.get("type") != "user":
-        continue
-    t = text_of(ev).strip()
-    # Harness-injected messages are not the user starting a turn.
-    if t and not t.startswith(("<", "Caveat:")):
-        start = i
-turn = events[start:]
-if not turn:
-    die()
+def muse_event(ev):
+    """(payload.kind, payload.event) of a Muse session record, else None."""
+    if ev.get("type") in ("user", "assistant") or not isinstance(ev.get("payload"), dict):
+        return None
+    inner = ev["payload"].get("event")
+    return (ev["payload"].get("kind"), inner if isinstance(inner, dict) else {})
 
-# Already stored? Then there is nothing to ask for.
-for ev in turn:
-    for b in blocks(ev):
-        if not isinstance(b, dict) or b.get("type") != "tool_use":
+
+def muse_turn(events):
+    """The turn from the last run-started record on, and its prompt plus replies."""
+    kinds = [(ev, (muse_event(ev) or ("", {}))[1].get("kind")) for ev in events]
+    starts = [i for i, (ev, k) in enumerate(kinds)
+              if k == "started" and muse_event(ev)[0] == "run"]
+    if not starts:
+        return [], ""
+    texts = []
+    for ev, k in kinds[starts[-1]:]:
+        inner = muse_event(ev)[1]
+        field = "prompt" if k == "started" else "text" if k == "assistant_message_committed" else ""
+        if isinstance(inner.get(field), str):
+            texts.append(inner[field])
+    return [ev for ev, _ in kinds[starts[-1]:]], "\n".join(filter(None, texts))
+
+
+if any(muse_event(ev) for ev in events):
+    turn, haystack = muse_turn(events)
+    if not turn:
+        die()
+    # Muse's tool-call record shape is not known, so a name match anywhere in
+    # the turn stands in for the tool_use block check below.
+    if any(w in json.dumps(ev) for ev in turn for w in WRITE_TOOLS):
+        die()
+else:
+    # Only this turn is in scope: everything after the last real user message.
+    start = 0
+    for i, ev in enumerate(events):
+        if ev.get("type") != "user":
             continue
-        name = b.get("name") or ""
-        if any(w in name for w in WRITE_TOOLS):
-            die()
+        t = text_of(ev).strip()
+        # Harness-injected messages are not the user starting a turn.
+        if t and not t.startswith(("<", "Caveat:")):
+            start = i
+    turn = events[start:]
+    if not turn:
+        die()
+
+    # Already stored? Then there is nothing to ask for.
+    for ev in turn:
+        for b in blocks(ev):
+            if not isinstance(b, dict) or b.get("type") != "tool_use":
+                continue
+            name = b.get("name") or ""
+            if any(w in name for w in WRITE_TOOLS):
+                die()
+
+    haystack = "\n".join(filter(None, (
+        text_of(ev) for ev in turn if ev.get("type") in ("user", "assistant")
+    )))
 
 extra = [s for s in os.environ.get("KEMORY_NUDGE_SIGNALS", "").split("|") if s]
 patterns = [re.compile(p, re.I) for p in DEFAULT_SIGNALS + tuple(extra)]
 
-haystack = "\n".join(filter(None, (
-    text_of(ev) for ev in turn if ev.get("type") in ("user", "assistant")
-)))
 # The Stop payload carries the last assistant message directly; a transcript
 # whose final write has not landed yet would otherwise miss it.
 last = hook.get("last_assistant_message")
