@@ -49,7 +49,7 @@ export KEMORY_MIN_NEW_TURNS="${KEMORY_CAPTURE_MIN_NEW_TURNS:-3}"
 export KEMORY_CAPTURE_SOURCE="${KEMORY_CAPTURE_SOURCE:-claude-code}"
 
 python3 <<'PY' 2>/dev/null
-import hashlib, json, os, sys, urllib.request
+import glob, hashlib, json, os, re, sys, urllib.request
 
 sys.path.insert(0, os.environ["KEMORY_SCRIPT_DIR"])
 from redact import redact  # noqa: E402
@@ -93,6 +93,24 @@ reason = hook.get("reason") or (
     else "unknown"
 )
 transcript = hook.get("transcript_path") or ""
+
+
+def muse_session_log(sid):
+    """Newest Muse session log for this id, or "" (Muse sends no transcript_path).
+
+    Only under Muse, and only for a plain id, so a hostile session_id cannot
+    steer the glob out of Muse's sessions directory.
+    """
+    if not os.environ.get("MUSE_PLUGIN_ROOT") or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", sid):
+        return ""
+    base = os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
+    found = glob.glob(os.path.join(
+        glob.escape(base), "muse", "sessions", "*", "*", "*", sid, "session.jsonl"))
+    return max(found, key=os.path.getmtime) if found else ""
+
+
+if not transcript or not os.path.isfile(transcript):
+    transcript = muse_session_log(session_id)
 if not transcript or not os.path.isfile(transcript):
     die()
 
@@ -116,6 +134,15 @@ try:
             try:
                 ev = json.loads(line)
             except Exception:
+                continue
+            # A Muse session log: a user turn is a run-started record.
+            if ev.get("type") not in ("user", "assistant") and isinstance(ev.get("payload"), dict):
+                run = ev["payload"].get("event")
+                if ev["payload"].get("kind") == "run" and isinstance(run, dict) \
+                        and run.get("kind") == "started" and isinstance(run.get("prompt"), str):
+                    t = run["prompt"].strip()
+                    if t and not t.startswith(("<", "Caveat:")):
+                        turns.append(t)
                 continue
             if ev.get("type") != "user":
                 continue

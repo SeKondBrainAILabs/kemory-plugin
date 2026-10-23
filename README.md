@@ -9,8 +9,7 @@ Claude Code, `.grok-plugin/plugin.json` for Grok Build and
 `.muse-plugin/plugin.json` for Muse Code, all carrying the same version. It
 installs on all three; the Grok Build catalog entry is in review, so for now
 Grok installs it from this repository ([Grok Build](#grok-build)). Muse Code
-has its own steps ([Muse Code](#muse-code)), and session capture does not run
-there yet.
+has its own steps ([Muse Code](#muse-code)).
 
 An MCP server gives an agent memory *tools*. This plugin makes it actually use
 them: relevant memories arrive under every prompt, a turn that settles
@@ -154,11 +153,13 @@ muse plugins approve kemory
 Restart any running Muse session, then sign in with `kemory login` from a
 terminal or with `/kemory:login`.
 
-Session capture and the store reminder do not run under Muse yet.
+Session capture runs under Muse and is on by default. The store reminder is
+off by default and cannot be switched on there yet.
 
 Muse starts the hooks and the memory server with a cleared environment, so
 `KEMORY_URL`, `KEMORY_API_KEY` and other `KEMORY_*` settings in your shell do
-not reach them. Sign in with the credential file that `kemory login` writes;
+not reach them. That includes `KEMORY_AUTO_CAPTURE=0`: to stop capture under
+Muse, disable the plugin. Sign in with the credential file that `kemory login` writes;
 a self-hosted instance is reached through the URL that file records.
 
 ### Which surface you are on

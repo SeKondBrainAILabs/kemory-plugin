@@ -2916,6 +2916,193 @@ class FixtureCoverage(unittest.TestCase):
                          "UNCAPTURED excuses an event that already has a fixture")
 
 
+class MuseTranscriptTest(unittest.TestCase):
+    """capture.sh and store-nudge.sh read Muse Code's session.jsonl.
+
+    The record shape is a public measurement, not a contract: supermemoryai/
+    muse-supermemory, hooks/lib/transcript.js (a user turn is payload.kind
+    "run" with event.kind "started" and the text in event.prompt; a reply is
+    event.kind "assistant_message_committed" with event.text), and
+    duck8823/traceary, docs/integrations/muse-lifecycle.md (the log lives at
+    ~/.local/share/muse/sessions/YYYY/MM/DD/<id>/session.jsonl). Muse starts
+    hooks with a cleared environment and sends no transcript_path.
+    """
+
+    LOG = ROOT / "test" / "fixtures" / "muse" / "session.jsonl"
+
+    @classmethod
+    def setUpClass(cls):
+        cls.srv = http.server.HTTPServer(("127.0.0.1", 0), Recorder)
+        cls.port = cls.srv.server_address[1]
+        threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.srv.shutdown()
+
+    def setUp(self):
+        reset_recorder()
+        self.home = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.home, ignore_errors=True)
+        d = pathlib.Path(self.home) / ".kemory"
+        d.mkdir()
+        (d / "credentials-prod").write_text(json.dumps({
+            "access_token": "tok", "refresh_token": "ref",
+            "expires_at": time.time() + 3600, "client_id": "kemory-cli",
+            "issuer": "https://issuer.invalid/realms/x",
+            "kemory_url": f"http://127.0.0.1:{self.port}", "env": "prod", "version": 2}))
+
+    def env(self, muse=True, **extra):
+        """Only what Muse passes; the credential file points at the Recorder."""
+        e = {"PATH": os.environ.get("PATH", ""), "HOME": self.home, "TMPDIR": self.home,
+             "KEMORY_STORE_NUDGE": "1"}
+        if muse:
+            e["MUSE_PLUGIN_ROOT"] = str(ROOT / "plugin")
+        e.update(extra)
+        return e
+
+    def run_hook(self, script, payload, muse=True, **env):
+        return subprocess.run(["bash", str(SCRIPTS / script)], input=json.dumps(payload),
+                              text=True, capture_output=True, env=self.env(muse, **env))
+
+    def lay_out_log(self, session_id, lines=None, day="2026/10/20"):
+        d = pathlib.Path(self.home) / ".local/share/muse/sessions" / day / session_id
+        d.mkdir(parents=True)
+        (d / "session.jsonl").write_text(lines if lines is not None else self.LOG.read_text())
+        return d / "session.jsonl"
+
+    def stop(self, **fields):
+        return {"session_id": "muse-1", "hook_event_name": "Stop", "cwd": "/work/app", **fields}
+
+    def test_capture_stores_user_prompts_from_muse_session_log(self):
+        r = self.run_hook("capture.sh", self.stop(transcript_path=str(self.LOG)))
+        self.assertEqual((r.returncode, r.stdout), (0, ""))
+        self.assertEqual(len(Recorder.posts), 1)
+        _, body, _path = Recorder.posts[0]
+        for kept in ("add retries to the uploader", "rename the config flag",
+                     "redis or postgres for the queue?"):
+            self.assertIn(kept, body["content"])
+        for dropped in ("Retries added", "Renamed the flag", "use postgres",
+                        "Plan mode is active", "/work/app\"", "opened"):
+            self.assertNotIn(dropped, body["content"])
+        self.assertEqual(body["session_id"], "muse-1")
+        self.assertEqual(body["namespace"], "user:sessions")
+
+    def test_capture_finds_session_log_by_session_id_without_transcript_path(self):
+        older = self.lay_out_log("muse-1", day="2026/10/19",
+                                 lines=json.dumps({"sequence": 1, "payload": {"kind": "run", "event": {
+                                     "kind": "started", "prompt": "STALE-DAY-PROMPT"}}}) + "\n")
+        os.utime(older, (1, 1))
+        self.lay_out_log("muse-1")
+        r = self.run_hook("capture.sh", self.stop())
+        self.assertEqual((r.returncode, r.stdout), (0, ""))
+        self.assertEqual(len(Recorder.posts), 1)
+        content = Recorder.posts[0][1]["content"]
+        self.assertIn("add retries to the uploader", content)
+        self.assertNotIn("STALE-DAY-PROMPT", content, "the newest match wins")
+
+    def test_capture_does_not_search_without_muse_plugin_root(self):
+        self.lay_out_log("muse-1")
+        r = self.run_hook("capture.sh", self.stop(), muse=False)
+        self.assertEqual((r.returncode, r.stdout), (0, ""))
+        self.assertEqual(Recorder.posts, [])
+
+    def lay_out_decoys(self):
+        """Logs that a session id holding path characters would reach through the glob."""
+        self.lay_out_log("muse-1")
+        sessions = pathlib.Path(self.home) / ".local/share/muse/sessions"
+        for rel in ("2026/x", "2026/10/20/a/b", "2026/10/20"):
+            d = sessions / rel
+            d.mkdir(parents=True, exist_ok=True)
+            (d / "session.jsonl").write_text(self.LOG.read_text())
+
+    BAD_IDS = ("../../x", "a/b", "muse-1/..", "muse*", "x" * 65, "muse-1\n")
+
+    def test_capture_rejects_session_id_with_path_characters(self):
+        self.lay_out_decoys()
+        for sid in self.BAD_IDS:
+            with self.subTest(session_id=sid):
+                r = self.run_hook("capture.sh", self.stop(session_id=sid))
+                self.assertEqual((r.returncode, r.stdout), (0, ""))
+                self.assertEqual(Recorder.posts, [])
+
+    def test_capture_second_stop_without_new_prompt_stores_nothing(self):
+        log = self.lay_out_log("muse-1")
+        self.run_hook("capture.sh", self.stop())
+        self.assertEqual(len(Recorder.posts), 1)
+        self.run_hook("capture.sh", self.stop())
+        self.assertEqual(len(Recorder.posts), 1, "the high-water mark counts Muse user turns")
+        marker = json.loads((pathlib.Path(self.home) / ".kemory/.captured/muse-1").read_text())
+        self.assertEqual(marker["captured_turns"], 3)
+        # A new run-started record is stored on a flush, with the old turns kept out.
+        log.write_text(log.read_text() + json.dumps({"sequence": 99, "payload": {
+            "kind": "run", "event": {"kind": "started", "prompt": "bump the timeout"}}}) + "\n")
+        self.run_hook("capture.sh", {**self.stop(), "hook_event_name": "SessionEnd", "reason": "exit"})
+        self.assertEqual(len(Recorder.posts), 2)
+        content = Recorder.posts[1][1]["content"]
+        self.assertIn("bump the timeout", content)
+        self.assertNotIn("add retries", content)
+
+    def test_store_nudge_fires_on_muse_turn_with_signal(self):
+        self.lay_out_log("muse-1")
+        r = self.run_hook("store-nudge.sh", self.stop())
+        self.assertEqual(r.returncode, 0)
+        out = json.loads(r.stdout)["hookSpecificOutput"]
+        self.assertEqual(out["hookEventName"], "Stop")
+        self.assertIn("kemory_store_memory", out["additionalContext"])
+
+    def test_store_nudge_reads_signal_from_last_assistant_message(self):
+        quiet = "".join(json.dumps({"sequence": i, "payload": {"kind": "run", "event": e}}) + "\n"
+                        for i, e in enumerate(
+                            [{"kind": "started", "prompt": "which queue?"}], 1))
+        log = self.lay_out_log("muse-1", lines=quiet)
+        r = self.run_hook("store-nudge.sh", self.stop(transcript_path=str(log),
+                          last_assistant_message="From now on we use postgres."))
+        self.assertIn("additionalContext", r.stdout)
+        r = self.run_hook("store-nudge.sh", self.stop(transcript_path=str(log), session_id="other"))
+        self.assertEqual(r.stdout, "")
+
+    def test_store_nudge_silent_when_muse_turn_already_stored(self):
+        stored = self.LOG.read_text() + json.dumps({"sequence": 50, "payload": {
+            "kind": "run", "event": {"kind": "tool_call", "name": "mcp__kemory__kemory_store_memory"}}}) + "\n"
+        self.lay_out_log("muse-1", lines=stored)
+        r = self.run_hook("store-nudge.sh", self.stop())
+        self.assertEqual((r.returncode, r.stdout), (0, ""))
+
+    def test_store_nudge_rejects_session_id_with_path_characters(self):
+        self.lay_out_decoys()
+        for sid in self.BAD_IDS:
+            with self.subTest(session_id=sid):
+                r = self.run_hook("store-nudge.sh", self.stop(session_id=sid))
+                self.assertEqual((r.returncode, r.stdout), (0, ""))
+
+    def test_store_nudge_uses_newest_session_log(self):
+        signal = json.dumps({"sequence": 1, "payload": {"kind": "run", "event": {
+            "kind": "started", "prompt": "From now on we use postgres."}}}) + "\n"
+        older = self.lay_out_log("muse-1", day="2026/10/19", lines=signal)
+        os.utime(older, (1, 1))
+        quiet = signal.replace("From now on we use postgres.", "which queue?")
+        self.lay_out_log("muse-1", lines=quiet)
+        r = self.run_hook("store-nudge.sh", self.stop())
+        self.assertEqual((r.returncode, r.stdout), (0, ""))
+
+    def test_store_nudge_looks_only_at_the_last_muse_turn(self):
+        # The write-tool record sits between two run-started records, so a turn
+        # that began at the first run-started record would swallow it.
+        stored = json.dumps({"sequence": 55, "payload": {"kind": "run", "event": {
+            "kind": "tool_call", "name": "mcp__kemory__kemory_store_memory"}}}) + "\n"
+        lines = self.LOG.read_text().splitlines(keepends=True)
+        lines.insert(5, stored)
+        self.lay_out_log("muse-1", lines="".join(lines))
+        r = self.run_hook("store-nudge.sh", self.stop())
+        self.assertIn("additionalContext", r.stdout)
+
+    def test_store_nudge_without_muse_plugin_root_does_not_search(self):
+        self.lay_out_log("muse-1")
+        r = self.run_hook("store-nudge.sh", self.stop(), muse=False)
+        self.assertEqual((r.returncode, r.stdout), (0, ""))
+
+
 class SkippedServerTest(unittest.TestCase):
     """Reporting that the HOST has switched our MCP server off.
 
