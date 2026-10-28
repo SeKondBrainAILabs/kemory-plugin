@@ -17,7 +17,9 @@ Layers, from the host inward:
    `capture.sh`, `store-nudge.sh` in `plugin/scripts/`. `capture.sh` serves Stop, PreCompact and SessionEnd.
 3. **Shared code**: `plugin/scripts/lib.sh` (bash, sourced; credential resolution via
    `kemory_resolve_auth`) and `plugin/scripts/redact.py` (imported by `capture.sh` and
-   `prompt-recall.sh`). `redact.py` is one copy on purpose, so both paths redact alike.
+   `prompt-recall.sh`) and `plugin/scripts/muse_log.py` (imported by `capture.sh` and
+   `store-nudge.sh`). Each is one copy on purpose, so both paths redact alike and share
+   one session-id guard.
 4. **Entry scripts**: `mcp.sh` runs `kemory mcp serve` or `mcp_bridge.py`
    (the `exec` lines in `mcp.sh`); `login.sh` runs `login.py`; `status.sh` is behind `/kemory:status`.
 5. **Dev tooling (not shipped)**: `scripts/check.sh`, `scripts/check_mcp_entry.py`,
@@ -26,7 +28,7 @@ Layers, from the host inward:
 
 Dependency rules:
 
-- A plugin script may depend only on `lib.sh`, `redact.py` and its own sibling entry
+- A plugin script may depend only on `lib.sh`, `redact.py`, `muse_log.py` and its own sibling entry
   file (`login.py`, `mcp_bridge.py`).
 - Nothing under `plugin/` depends on `scripts/` or `test/`.
 - Nothing imports from `test/`. Tests run the shipped scripts as subprocesses and do not

@@ -49,10 +49,11 @@ export KEMORY_MIN_NEW_TURNS="${KEMORY_CAPTURE_MIN_NEW_TURNS:-3}"
 export KEMORY_CAPTURE_SOURCE="${KEMORY_CAPTURE_SOURCE:-claude-code}"
 
 python3 <<'PY' 2>/dev/null
-import glob, hashlib, json, os, re, sys, urllib.request
+import hashlib, json, os, sys, urllib.request
 
 sys.path.insert(0, os.environ["KEMORY_SCRIPT_DIR"])
 from redact import redact  # noqa: E402
+from muse_log import muse_session_log  # noqa: E402
 
 MAX_CHARS = 8000
 
@@ -93,20 +94,6 @@ reason = hook.get("reason") or (
     else "unknown"
 )
 transcript = hook.get("transcript_path") or ""
-
-
-def muse_session_log(sid):
-    """Newest Muse session log for this id, or "" (Muse sends no transcript_path).
-
-    Only under Muse, and only for a plain id, so a hostile session_id cannot
-    steer the glob out of Muse's sessions directory.
-    """
-    if not os.environ.get("MUSE_PLUGIN_ROOT") or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", sid):
-        return ""
-    base = os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
-    found = glob.glob(os.path.join(
-        glob.escape(base), "muse", "sessions", "*", "*", "*", sid, "session.jsonl"))
-    return max(found, key=os.path.getmtime) if found else ""
 
 
 if not transcript or not os.path.isfile(transcript):
