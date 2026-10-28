@@ -1,8 +1,10 @@
 # CLAUDE.md
 
-Contributor notes for the Kemory plugin: Claude Code and Grok hooks, an MCP entry and
-two slash commands, written in bash and Python. Only `plugin/` ships (the marketplace
-source is `./plugin`). This file, `scripts/`, `test/` and `changes/` do not.
+Contributor notes for the Kemory plugin: Claude Code, Grok and Muse hooks, an MCP entry
+and two slash commands, written in bash and Python, plus a Cursor plugin. Two trees
+ship: `plugin/` (the Claude marketplace source is `./plugin`) and `plugins/cursor/`
+(the Cursor marketplace source is `./plugins/cursor`). This file, `scripts/`, `test/`
+and `changes/` do not.
 Server, CLI and MCP tool definitions live in kemory-community, not here.
 
 ## Architecture
@@ -38,8 +40,11 @@ plugin, not here (`plugin/hooks/hooks.json` description). Do not add them here.
 Versions and releases:
 
 - `plugin/.claude-plugin/plugin.json` and `plugin/.grok-plugin/plugin.json` must be
-  byte-identical, with one `X.Y.Z` version. `.claude-plugin/marketplace.json`
-  `plugins[0].version` must match it (`scripts/check.sh`, "manifests agree" steps).
+  byte-identical, with one `X.Y.Z` version. Four more must carry the same version:
+  `plugin/.muse-plugin/plugin.json`, `.claude-plugin/marketplace.json`
+  `plugins[0].version`, `plugins/cursor/.cursor-plugin/plugin.json` and
+  `.cursor-plugin/marketplace.json` `plugins[0].version`
+  (`scripts/check.sh`, "manifests agree" steps).
 - `.github/workflows/release.yml` tags `v<version>` on push to `main` and fails if
   `CHANGELOG.md` has no `## [X.Y.Z]` section. It does nothing if that tag exists.
 - Put a user-facing change in `changes/<topic>.md`, with only the headings Upgrading,
