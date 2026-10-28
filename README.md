@@ -324,7 +324,7 @@ plugin/
 ├── commands/login.md             /kemory:login
 ├── commands/status.md            /kemory:status
 ├── skills/                       kemory, setup
-└── scripts/                      one script per hook, plus lib and redact
+└── scripts/                      one script per hook, plus lib, redact and muse_log
 ```
 
 Everything here is the plugin itself — one tree, a manifest per host, rather

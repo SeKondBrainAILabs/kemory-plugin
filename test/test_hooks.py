@@ -4200,14 +4200,14 @@ PY_FROM_IMPORT_PATTERN = re.compile(r"\bfrom\s+([A-Za-z_][\w.]*)\s+import\b")
 PY_IMPORT_PATTERN = re.compile(r"(?:^|[;'\"\s])import\s+([A-Za-z_][\w.]*(?:\s*,\s*[A-Za-z_][\w.]*)*)", re.M)
 EXEC_PATTERN = re.compile(r"\bexec\s+(?:python3\s+)?(\S+)")
 REPO_PATH_PATTERN = re.compile(r"(?<![\w.-])((?:\.\./)*(?:scripts|test)/[\w./-]+)")
-ALLOWED_IMPORTS = {"redact"}
+ALLOWED_IMPORTS = {"redact", "muse_log"}
 ALLOWED_EXEC_COMMANDS = {"kemory"}
 
 
 def plugin_dependency_violations(name, text, siblings):
     """Dependencies of one plugin/scripts file that CLAUDE.md does not allow.
 
-    A file may source lib.sh, import the standard library and redact, exec a
+    A file may source lib.sh, import the standard library, redact and muse_log, exec a
     sibling entry file (or the kemory CLI), and name no path in the repo's own
     scripts/ or test/, which do not ship. `siblings` is the set of file names
     in plugin/scripts, so `scripts/mcp.sh` in a comment is read as the plugin's.
@@ -4243,6 +4243,11 @@ class PluginDependencyTest(unittest.TestCase):
             found += plugin_dependency_violations(
                 path.name, path.read_text(errors="replace"), siblings)
         self.assertEqual(found, [], f"plugin/scripts depends on code that does not ship: {found}")
+
+    def test_muse_session_log_is_defined_once(self):
+        defining = [path.name for path in sorted(SCRIPTS.iterdir())
+                    if path.is_file() and "def muse_session_log" in path.read_text(errors="replace")]
+        self.assertEqual(defining, ["muse_log.py"])
 
     def test_scanner_reports_a_source_of_another_file(self):
         self.assertEqual(

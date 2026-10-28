@@ -19,13 +19,20 @@ set -uo pipefail
 [ "${KEMORY_STORE_NUDGE:-0}" = "1" ] || exit 0
 command -v python3 >/dev/null 2>&1 || exit 0
 
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 HOOK_INPUT="$(cat)"
 export HOOK_INPUT
+export KEMORY_SCRIPT_DIR="$DIR"
+# Importing muse_log.py must not litter the user's plugin directory.
 export PYTHONDONTWRITEBYTECODE=1
 export KEMORY_NUDGE_SIGNALS="${KEMORY_STORE_NUDGE_SIGNALS:-}"
 
 python3 <<'PY' 2>/dev/null
-import glob, hashlib, json, os, re, sys
+import hashlib, json, os, re, sys
+
+sys.path.insert(0, os.environ["KEMORY_SCRIPT_DIR"])
+from muse_log import muse_session_log  # noqa: E402
 
 # Phrases that mark a turn as having settled something worth keeping. Kept
 # deliberately narrow: every entry here is a phrase that states a conclusion,
@@ -75,20 +82,6 @@ if hook.get("stop_hook_active"):
     die()
 
 transcript = hook.get("transcript_path") or ""
-
-
-def muse_session_log(sid):
-    """Newest Muse session log for this id, or "" (Muse sends no transcript_path).
-
-    Only under Muse, and only for a plain id, so a hostile session_id cannot
-    steer the glob out of Muse's sessions directory.
-    """
-    if not os.environ.get("MUSE_PLUGIN_ROOT") or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", sid):
-        return ""
-    base = os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
-    found = glob.glob(os.path.join(
-        glob.escape(base), "muse", "sessions", "*", "*", "*", sid, "session.jsonl"))
-    return max(found, key=os.path.getmtime) if found else ""
 
 
 if not transcript or not os.path.isfile(transcript):
