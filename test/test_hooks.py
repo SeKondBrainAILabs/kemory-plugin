@@ -12,6 +12,8 @@ import os
 import pathlib
 import re
 import shutil
+import signal
+import socket
 import subprocess
 import sys
 import tempfile
@@ -2299,7 +2301,10 @@ class IdpRecorder(http.server.BaseHTTPRequestHandler):
 
     requests: list = []
     # Each poll pops the next scripted token response; the last one repeats.
+    # A body may be bytes: then it is sent raw as text/html, not as JSON.
     token_script: list = []
+    # time.monotonic() of each /token request, to measure the poll gap.
+    token_times: list = []
     device_response: dict = {}
     device_status: int = 200
     discovery: dict = {}
@@ -2312,6 +2317,13 @@ class IdpRecorder(http.server.BaseHTTPRequestHandler):
         raw = json.dumps(body).encode()
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(raw)))
+        self.end_headers()
+        self.wfile.write(raw)
+
+    def _raw(self, status, raw):
+        self.send_response(status)
+        self.send_header("Content-Type", "text/html")
         self.send_header("Content-Length", str(len(raw)))
         self.end_headers()
         self.wfile.write(raw)
@@ -2344,10 +2356,14 @@ class IdpRecorder(http.server.BaseHTTPRequestHandler):
             self._json(IdpRecorder.device_status, IdpRecorder.device_response)
             return
         if self.path.endswith("/token"):
+            IdpRecorder.token_times.append(time.monotonic())
             step = (IdpRecorder.token_script.pop(0) if len(IdpRecorder.token_script) > 1
                     else (IdpRecorder.token_script[0] if IdpRecorder.token_script else {}))
             status, body = step
-            self._json(status, body)
+            if isinstance(body, bytes):
+                self._raw(status, body)
+            else:
+                self._json(status, body)
             return
         self._json(404, {})
 
@@ -2384,6 +2400,7 @@ class DeviceLoginTest(unittest.TestCase):
     def setUp(self):
         self.base = f"http://127.0.0.1:{self.port}"
         IdpRecorder.requests.clear()
+        IdpRecorder.token_times.clear()
         IdpRecorder.whoami = None
         IdpRecorder.whoami_headers.clear()
         IdpRecorder.discovery = {"issuer": self.base}
@@ -2560,6 +2577,77 @@ class DeviceLoginTest(unittest.TestCase):
         ]
         r = self.run_login()
         self.assertEqual(r.returncode, 0, r.stderr)
+        # The interval was 1 s; the IdP asked for more, so the next poll waits 5 s longer.
+        self.assertEqual(len(IdpRecorder.token_times), 2)
+        self.assertGreaterEqual(IdpRecorder.token_times[1] - IdpRecorder.token_times[0], 5.0)
+
+    def cred_path(self):
+        return pathlib.Path(self.home) / ".kemory" / "credentials-prod"
+
+    def test_an_unreachable_identity_provider_is_reported_not_raised(self):
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            closed = s.getsockname()[1]
+        IdpRecorder.discovery = {"issuer": f"http://127.0.0.1:{closed}"}
+        r = self.run_login()
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("kemory: could not start sign-in", r.stderr)
+        self.assertIn("Connection refused", r.stderr)
+        self.assertNotIn("Traceback", r.stderr)
+
+    def test_a_non_json_error_body_reports_the_http_status(self):
+        IdpRecorder.token_script = [(502, b"<html>Bad Gateway</html>")]
+        r = self.run_login()
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("sign-in failed: HTTP 502", r.stderr)
+        self.assertNotIn("Traceback", r.stderr)
+        self.assertFalse(self.cred_path().exists())
+
+    def test_an_unrecognised_token_error_reports_its_description(self):
+        IdpRecorder.token_script = [
+            (400, {"error": "invalid_grant", "error_description": "Code not valid"})]
+        r = self.run_login()
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("sign-in failed: Code not valid", r.stderr)
+
+    def test_a_failed_credential_write_leaves_no_temp_file_and_no_credential(self):
+        # A directory where the file goes makes os.replace fail.
+        self.cred_path().mkdir(parents=True)
+        r = self.run_login()
+        self.assertEqual(r.returncode, 1)
+        self.assertNotIn("Signed in as", r.stdout)
+        self.assertTrue(self.cred_path().is_dir())
+        left = list((pathlib.Path(self.home) / ".kemory").glob(".credentials-prod.*.tmp"))
+        self.assertEqual(left, [])
+
+    def test_gives_up_when_the_link_expires_while_pending(self):
+        IdpRecorder.device_response = dict(IdpRecorder.device_response, expires_in=1, interval=1)
+        IdpRecorder.token_script = [(400, {"error": "authorization_pending"})]
+        r = self.run_login()
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("timed out waiting for sign-in", r.stderr)
+        self.assertFalse(self.cred_path().exists())
+
+    def test_ctrl_c_cancels_cleanly(self):
+        IdpRecorder.token_script = [(400, {"error": "authorization_pending"})]
+        e = {k: v for k, v in os.environ.items() if not k.startswith("KEMORY_")}
+        e.update({"HOME": self.home, "KEMORY_URL": self.base})
+        # A runner that ignores SIGINT would pass that on to the child.
+        proc = subprocess.Popen(
+            [str(SCRIPTS / "login.sh")], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, env=e,
+            preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_DFL))
+        self.addCleanup(proc.kill)
+        for line in proc.stdout:
+            if "Waiting" in line:
+                break
+        else:
+            self.fail("login never printed Waiting")
+        proc.send_signal(signal.SIGINT)
+        err = proc.stderr.read()
+        proc.wait(timeout=30)
+        self.assertEqual(proc.returncode, 1, err)
+        self.assertIn("sign-in cancelled", err)
 
     def test_a_declined_sign_in_says_so(self):
         IdpRecorder.token_script = [(400, {"error": "access_denied"})]
