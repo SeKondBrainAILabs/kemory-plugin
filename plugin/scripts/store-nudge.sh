@@ -121,7 +121,7 @@ def text_of(ev):
     content = content_of(ev)
     if isinstance(content, str):
         return content
-    return " ".join(b["text"] for b in blocks(ev)
+    return " ".join(b.get("text", "") for b in blocks(ev)
                     if isinstance(b, dict) and b.get("type") == "text"
                     and isinstance(b.get("text", ""), str))
 

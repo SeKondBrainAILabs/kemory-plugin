@@ -369,6 +369,21 @@ class HookTest(unittest.TestCase):
         self.assertEqual(len(Recorder.posts), 1)
         self.assertIn("- real words", Recorder.posts[0][1]["content"])
 
+    def test_capture_keeps_turns_around_a_part_without_text(self):
+        Recorder.posts.clear()
+        lines = [json.dumps({"type": "user", "message": {"content": "turn 0 work"}}),
+                 json.dumps({"type": "user", "message": {"content": [
+                     {"type": "image", "source": {}},
+                     {"type": "text", "text": "after image"}]}})]
+        self.run_script("capture.sh",
+                        {"session_id": "imgpart", "hook_event_name": "SessionEnd",
+                         "transcript_path": self.raw_transcript(lines)},
+                        KEMORY_API_KEY="k")
+        self.assertEqual(len(Recorder.posts), 1)
+        content = Recorder.posts[0][1]["content"]
+        self.assertIn("- turn 0 work", content)
+        self.assertIn("after image", content)
+
     # --- standing instruction (SessionStart) -------------------------------
     INSTRUCTION_MARK = "Kemory is this user's persistent memory"
 
@@ -613,6 +628,17 @@ class HookTest(unittest.TestCase):
                  "transcript_path": self.raw_transcript([user, odd_reply, reply])},
                 KEMORY_API_KEY="k", KEMORY_STORE_NUDGE="1")
             self.assertIn("hookSpecificOutput", json.loads(r.stdout))
+
+    def test_nudge_survives_a_text_block_without_text(self):
+        user, reply = (json.dumps(e) for e in self.DECISION)
+        textless = json.dumps({"type": "assistant", "message": {"content": [
+            {"type": "text"}]}})
+        r = self.run_script(
+            "store-nudge.sh",
+            {"session_id": "notext", "hook_event_name": "Stop",
+             "transcript_path": self.raw_transcript([user, textless, reply])},
+            KEMORY_API_KEY="k", KEMORY_STORE_NUDGE="1")
+        self.assertIn("hookSpecificOutput", json.loads(r.stdout))
 
     def test_nudge_reads_the_last_assistant_message_from_the_payload(self):
         # The decision may be in the message that is still being written when

@@ -140,8 +140,9 @@ try:
             content = message.get("content") if isinstance(message, dict) else None
             if isinstance(content, list):
                 content = " ".join(
-                    p["text"] for p in content
-                    if isinstance(p, dict) and isinstance(p.get("text", ""), str)
+                    p.get("text", "")
+                    if isinstance(p, dict) and isinstance(p.get("text", ""), str) else ""
+                    for p in content
                 )
             if isinstance(content, str):
                 t = content.strip()
