@@ -94,9 +94,12 @@ try:
     with open(transcript, errors="replace") as fh:
         for line in fh:
             try:
-                events.append(json.loads(line))
+                ev = json.loads(line)
             except Exception:
                 continue
+            # Valid JSON is not always an object; only objects are records.
+            if isinstance(ev, dict):
+                events.append(ev)
 except Exception:
     die()
 
@@ -104,17 +107,23 @@ if not events:
     die()
 
 
+def content_of(ev):
+    message = ev.get("message")
+    return message.get("content") if isinstance(message, dict) else None
+
+
 def blocks(ev):
-    content = (ev.get("message") or {}).get("content")
+    content = content_of(ev)
     return content if isinstance(content, list) else []
 
 
 def text_of(ev):
-    content = (ev.get("message") or {}).get("content")
+    content = content_of(ev)
     if isinstance(content, str):
         return content
-    return " ".join(b.get("text", "") for b in blocks(ev)
-                    if isinstance(b, dict) and b.get("type") == "text")
+    return " ".join(b["text"] for b in blocks(ev)
+                    if isinstance(b, dict) and b.get("type") == "text"
+                    and isinstance(b.get("text", ""), str))
 
 
 def muse_event(ev):

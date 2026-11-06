@@ -122,6 +122,9 @@ try:
                 ev = json.loads(line)
             except Exception:
                 continue
+            # Valid JSON is not always an object; only objects are records.
+            if not isinstance(ev, dict):
+                continue
             # A Muse session log: a user turn is a run-started record.
             if ev.get("type") not in ("user", "assistant") and isinstance(ev.get("payload"), dict):
                 run = ev["payload"].get("event")
@@ -133,10 +136,12 @@ try:
                 continue
             if ev.get("type") != "user":
                 continue
-            content = (ev.get("message") or {}).get("content")
+            message = ev.get("message")
+            content = message.get("content") if isinstance(message, dict) else None
             if isinstance(content, list):
                 content = " ".join(
-                    p.get("text", "") for p in content if isinstance(p, dict)
+                    p["text"] for p in content
+                    if isinstance(p, dict) and isinstance(p.get("text", ""), str)
                 )
             if isinstance(content, str):
                 t = content.strip()

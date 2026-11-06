@@ -327,6 +327,48 @@ class HookTest(unittest.TestCase):
         self.assertEqual(body["metadata"]["turns"], 1)
 
 
+    ODD_LINES = [
+        "null", "123", '"s"', "[]",
+        '{"type":"user","message":"plain"}',
+        '{"type":"user","message":["a"]}',
+        '{"type":"user","message":{"content":[{"type":"text","text":null}]}}',
+        '{"type":"user","message":{"content":[{"type":"text","text":5}]}}',
+    ]
+
+    def raw_transcript(self, lines):
+        p = pathlib.Path(tempfile.mktemp(suffix=".jsonl", dir=self.home))
+        p.write_text("\n".join(lines) + "\n")
+        return str(p)
+
+    def test_capture_skips_a_transcript_line_that_is_not_an_object(self):
+        # One odd line must cost that line, not the whole session's capture.
+        good = [json.dumps({"type": "user", "message": {"content": f"turn {i} work"}})
+                for i in range(3)]
+        for bad in self.ODD_LINES:
+            with self.subTest(bad=bad):
+                Recorder.posts.clear()
+                self.run_script("capture.sh",
+                                {"session_id": f"bad{abs(hash(bad))}",
+                                 "hook_event_name": "SessionEnd",
+                                 "transcript_path": self.raw_transcript(good + [bad])},
+                                KEMORY_API_KEY="k")
+                self.assertEqual(len(Recorder.posts), 1, f"no upload for {bad!r}")
+                content = Recorder.posts[0][1]["content"]
+                for i in range(3):
+                    self.assertIn(f"- turn {i} work", content)
+                self.assertEqual(Recorder.posts[0][1]["metadata"]["turns"], 3)
+
+    def test_capture_keeps_valid_text_next_to_a_bad_part(self):
+        Recorder.posts.clear()
+        line = json.dumps({"type": "user", "message": {"content": [
+            {"type": "text", "text": None}, {"type": "text", "text": "real words"}]}})
+        self.run_script("capture.sh",
+                        {"session_id": "partmix", "hook_event_name": "SessionEnd",
+                         "transcript_path": self.raw_transcript([line])},
+                        KEMORY_API_KEY="k")
+        self.assertEqual(len(Recorder.posts), 1)
+        self.assertIn("- real words", Recorder.posts[0][1]["content"])
+
     # --- standing instruction (SessionStart) -------------------------------
     INSTRUCTION_MARK = "Kemory is this user's persistent memory"
 
@@ -544,6 +586,33 @@ class HookTest(unittest.TestCase):
         self.assertNotEqual(first.stdout.strip(), "")
         self.assertEqual(second.stdout.strip(), "",
                          "re-nudging the same material is how a hook gets uninstalled")
+
+    def test_nudge_skips_a_transcript_line_that_is_not_an_object(self):
+        user, reply = (json.dumps(e) for e in self.DECISION)
+        odd_reply = json.dumps({"type": "assistant", "message": {"content": [
+            {"type": "text", "text": None}]}})
+        n = 0
+        for bad in self.ODD_LINES + [odd_reply]:
+            for name, lines in (("first", [bad, user, reply]),
+                                ("middle", [user, bad, reply]),
+                                ("last", [user, reply, bad])):
+                n += 1
+                with self.subTest(bad=bad, position=name):
+                    r = self.run_script(
+                        "store-nudge.sh",
+                        {"session_id": f"odd{n}", "hook_event_name": "Stop",
+                         "transcript_path": self.raw_transcript(lines)},
+                        KEMORY_API_KEY="k", KEMORY_STORE_NUDGE="1")
+                    out = json.loads(r.stdout)
+                    self.assertEqual(out["hookSpecificOutput"]["hookEventName"], "Stop")
+        # A bad line between the two DECISION lines.
+        with self.subTest(bad=odd_reply, position="between"):
+            r = self.run_script(
+                "store-nudge.sh",
+                {"session_id": "oddbetween", "hook_event_name": "Stop",
+                 "transcript_path": self.raw_transcript([user, odd_reply, reply])},
+                KEMORY_API_KEY="k", KEMORY_STORE_NUDGE="1")
+            self.assertIn("hookSpecificOutput", json.loads(r.stdout))
 
     def test_nudge_reads_the_last_assistant_message_from_the_payload(self):
         # The decision may be in the message that is still being written when
