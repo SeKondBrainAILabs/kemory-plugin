@@ -32,6 +32,33 @@ PLUS_INJECTED = re.compile(
     r"^- (?:\[([^\]\n]+)\] )?(.+)\n {2}\(memory_id: ([0-9a-f-]{36})\)$", re.M)
 
 
+class FtpTrap:
+    """A listener on 127.0.0.1 that records whether anything connected.
+
+    urllib reaches an `ftp://` URL with a plain TCP connect, so a script that
+    skips its scheme check opens a connection here. A `file://` URL fails inside
+    urllib whether or not the check exists, so it cannot prove the check.
+    """
+
+    def __enter__(self):
+        self.sock = socket.socket()
+        self.sock.bind(("127.0.0.1", 0))
+        self.sock.listen(5)
+        self.sock.settimeout(0.5)
+        self.url = f"ftp://127.0.0.1:{self.sock.getsockname()[1]}"
+        return self
+
+    def connected(self):
+        try:
+            self.sock.accept()[0].close()
+            return True
+        except socket.timeout:
+            return False
+
+    def __exit__(self, *exc):
+        self.sock.close()
+
+
 class Recorder(http.server.BaseHTTPRequestHandler):
     posts: list = []
     get_payload: dict = {"namespaces": []}
@@ -305,11 +332,12 @@ class HookTest(unittest.TestCase):
         self.assertEqual(len(Recorder.posts), 2)
 
     def test_capture_refuses_non_http_url(self):
-        self.run_script("capture.sh",
-                        {"session_id": "s", "transcript_path": self.transcript("x")},
-                        KEMORY_API_KEY="k", KEMORY_AUTO_CAPTURE="1",
-                        KEMORY_URL="file:///etc/passwd")
-        self.assertEqual(len(Recorder.posts), 0)
+        with FtpTrap() as trap:
+            self.run_script("capture.sh",
+                            {"session_id": "s", "transcript_path": self.transcript("x")},
+                            KEMORY_API_KEY="k", KEMORY_AUTO_CAPTURE="1",
+                            KEMORY_URL=trap.url)
+            self.assertFalse(trap.connected())
 
     def test_capture_skips_assistant_turns_and_harness_noise(self):
         p = pathlib.Path(tempfile.mktemp(suffix=".jsonl", dir=self.home))
@@ -1080,8 +1108,9 @@ class HookTest(unittest.TestCase):
         self.assertNotIn("tok", msg)
 
     def test_prompt_recall_refuses_non_http_url(self):
-        self.recall(KEMORY_URL="file:///etc/passwd")
-        self.assertEqual(Recorder.posts, [])
+        with FtpTrap() as trap:
+            self.recall(KEMORY_URL=trap.url)
+            self.assertFalse(trap.connected())
 
     def test_prompt_recall_silent_without_credentials(self):
         r = self.run_script("prompt-recall.sh",
