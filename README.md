@@ -310,7 +310,8 @@ redaction does and does not guarantee.
 
 Validates manifests, shell syntax, executable bits, plugin source paths, hook
 script references, the version and content of the two manifests, the bundled
-MCP entry, changelog fragments, leaked internal references, and the hook tests.
+MCP entry, changelog fragments, leaked internal references, the Python (ruff, F
+and B rules), and the hook tests.
 CI runs the same
 script plus shellcheck. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
