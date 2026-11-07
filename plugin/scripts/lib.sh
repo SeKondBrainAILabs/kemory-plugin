@@ -22,6 +22,11 @@ KEMORY_DEFAULT_URL="${KEMORY_DEFAULT_URL:-https://api.kemory.s9n.ai}"
 # the fact that does not depend on the host.
 KEMORY_PLUGIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd)"
 
+# This file's own directory, where the Python programs the helpers below run live.
+# Not the caller's $DIR: hooks, mcp.sh, status.sh and tests all source this file
+# by absolute path from their own directories.
+KEMORY_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
+
 # True when this plugin is running under Grok Build: installed under ~/.grok, or
 # told so by a host that does export CLAUDE_PLUGIN_ROOT.
 kemory_is_grok() {
@@ -93,123 +98,7 @@ kemory_resolve_auth() {
     [ -r "$creds" ] || creds="$HOME/.kemory/credentials"
     [ -r "$creds" ] || return 1
     command -v python3 >/dev/null 2>&1 || return 1
-    # shellcheck disable=SC2016
-    eval "$(KEMORY_CREDS="$creds" python3 -c '
-import json, os, shlex, tempfile, time
-
-CREDS = os.environ["KEMORY_CREDS"]
-
-
-def write_back(d):
-    """Replace the credential file atomically, 0600.
-
-    The temp name is unique per writer. It used to be CREDS + ".tmp" in every
-    writer (this hook, login.py, the CLI), so two concurrent refreshes wrote
-    into one inode and left the tail of the longer write behind the shorter
-    one -- a file ending in "}}" that every reader rejected.
-    mkstemp creates the file 0600 and beside the original, so the rename
-    cannot cross a filesystem boundary.
-    """
-    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(CREDS) or ".",
-                               prefix="." + os.path.basename(CREDS) + ".",
-                               suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w") as fh:
-            json.dump(d, fh)
-        os.replace(tmp, CREDS)
-    except Exception:
-        try:
-            os.unlink(tmp)
-        except Exception:
-            pass
-        return False
-    return True
-
-
-try:
-    text = open(CREDS).read()
-except Exception:
-    raise SystemExit(0)
-try:
-    d = json.loads(text)
-except ValueError:
-    # A file damaged by the race above is one complete object followed by
-    # leftover bytes. Take the object, and repair the file on disk: an older
-    # kemory CLI -- which is what serves the MCP tools when it is installed --
-    # still rejects the damaged file and would report the user signed out.
-    try:
-        d, _ = json.JSONDecoder().raw_decode(text.lstrip())
-    except ValueError:
-        d = None
-    if isinstance(d, dict):
-        write_back(d)
-if not isinstance(d, dict):
-    # Present but unreadable is not the same as absent: say which, so nobody
-    # is sent to sign in when the fix is replacing a broken file.
-    print("KEMORY_CREDS_CORRUPT=" + shlex.quote(CREDS))
-    raise SystemExit(0)
-
-expired = False
-
-
-def refresh(d):
-    """Trade the refresh token for a fresh access token, in place.
-
-    The CLI refreshes on every use; the hooks used to read access_token and
-    nothing else, so once it expired every hook 401d and no-opd with no
-    notice at all -- the setup hint only fires when no credential file
-    exists, and a stale one does. Best-effort: any failure leaves the old
-    token in place and the caller reports it as expired.
-    """
-    import urllib.parse
-    import urllib.request
-
-    issuer = (d.get("issuer") or "").rstrip("/")
-    token = d.get("refresh_token")
-    client = d.get("client_id")
-    if not (issuer and token and client):
-        return False
-    body = urllib.parse.urlencode({
-        "grant_type": "refresh_token",
-        "refresh_token": token,
-        "client_id": client,
-    }).encode()
-    req = urllib.request.Request(
-        issuer + "/protocol/openid-connect/token",
-        data=body,
-        headers={"Content-Type": "application/x-www-form-urlencoded"},
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=6) as r:
-            fresh = json.load(r)
-    except Exception:
-        return False
-    if not fresh.get("access_token"):
-        return False
-    d["access_token"] = fresh["access_token"]
-    if fresh.get("refresh_token"):
-        d["refresh_token"] = fresh["refresh_token"]
-    if fresh.get("expires_in"):
-        d["expires_at"] = time.time() + float(fresh["expires_in"])
-    # The refreshed token is still good for this process even if the write
-    # fails, so do not report failure.
-    write_back(d)
-    return True
-
-
-exp = d.get("expires_at")
-if d.get("access_token") and isinstance(exp, (int, float)):
-    if time.time() > float(exp) - 60 and not refresh(d):
-        expired = True
-
-for var, key in (("url", "kemory_url"), ("token", "access_token"), ("api_key", "api_key"),
-                 ("org", "active_org_id")):
-    v = d.get(key) or ""
-    if v:
-        print(f"{var}={shlex.quote(str(v))}")
-if expired:
-    print("KEMORY_TOKEN_EXPIRED=1")
-' 2>/dev/null)"
+    eval "$(KEMORY_CREDS="$creds" python3 "$KEMORY_LIB_DIR/kemory_creds.py" 2>/dev/null)"
   fi
 
   [ -n "$url" ] || return 1
@@ -256,23 +145,7 @@ kemory_active_org() {
     -H "$KEMORY_AUTH_HEADER" ${KEMORY_ORG_HEADER:+-H "$KEMORY_ORG_HEADER"} \
     -X POST "$KEMORY_BASE_URL/mcp/v1" \
     -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"kemory_whoami","arguments":{}}}' \
-    2>/dev/null | python3 -c '
-import json, sys
-raw = sys.stdin.read().strip()
-try:
-    data = json.loads(raw)
-except ValueError:
-    # An SSE reply: the last data line carries the result.
-    lines = [l[5:].strip() for l in raw.splitlines() if l.startswith("data:")]
-    try:
-        data = json.loads(lines[-1])
-    except Exception:
-        raise SystemExit(0)
-sc = ((data.get("result") or {}).get("structuredContent") or {}) if isinstance(data, dict) else {}
-name, org = sc.get("org_name"), sc.get("org_id")
-if isinstance(name, str) and name.strip():
-    print(name.strip() + "\t" + str(org or ""))
-' 2>/dev/null
+    2>/dev/null | python3 "$KEMORY_LIB_DIR/kemory_lib.py" active-org 2>/dev/null
 }
 
 # Locate a Kemory API key sitting in an MCP client config, where our own docs
@@ -288,53 +161,7 @@ if isinstance(name, str) and name.strip():
 # Echoes the config path and returns 0 when found.
 kemory_find_mcp_config_key() {
   command -v python3 >/dev/null 2>&1 || return 1
-  python3 - "$@" <<'PY' 2>/dev/null
-import json, os, sys
-
-candidates = [
-    os.path.join(os.environ.get("CLAUDE_PROJECT_DIR", os.getcwd()), ".mcp.json"),
-    os.path.expanduser("~/.claude.json"),
-    os.path.expanduser("~/.mcp.json"),
-    os.path.expanduser(
-        "~/Library/Application Support/Claude/claude_desktop_config.json"),
-]
-
-
-def has_kemory_key(node):
-    """True if any server entry looks like Kemory and carries a key."""
-    if not isinstance(node, dict):
-        return False
-    for name, cfg in node.items():
-        if not isinstance(cfg, dict):
-            continue
-        blob = json.dumps(cfg).lower()
-        looks_kemory = "kemory" in str(name).lower() or "kemory" in blob
-        has_key = any(
-            k.lower() in ("x-api-key", "authorization")
-            for k in (cfg.get("headers") or {})
-        ) or "kemory_api_key" in blob
-        if looks_kemory and has_key:
-            return True
-    return False
-
-
-for path in candidates:
-    try:
-        with open(path) as fh:
-            data = json.load(fh)
-    except Exception:
-        continue
-    servers = data.get("mcpServers") if isinstance(data, dict) else None
-    if has_kemory_key(servers) or has_kemory_key(data):
-        print(path)
-        raise SystemExit(0)
-    # Claude Code nests per-project config under "projects".
-    for proj in (data.get("projects") or {}).values() if isinstance(data, dict) else []:
-        if isinstance(proj, dict) and has_kemory_key(proj.get("mcpServers")):
-            print(path)
-            raise SystemExit(0)
-raise SystemExit(1)
-PY
+  python3 "$KEMORY_LIB_DIR/kemory_lib.py" find-mcp-config-key "$@" 2>/dev/null
 }
 
 # Count kemory MCP server entries sitting in MCP client configs on this machine.
@@ -351,43 +178,7 @@ PY
 # Echoes the count. The plugin's own bundled entry is not in these files.
 kemory_count_mcp_entries() {
   command -v python3 >/dev/null 2>&1 || { echo 0; return 0; }
-  python3 - <<'PY' 2>/dev/null || echo 0
-import json, os
-
-candidates = [
-    os.path.join(os.environ.get("CLAUDE_PROJECT_DIR", os.getcwd()), ".mcp.json"),
-    os.path.expanduser("~/.claude.json"),
-    os.path.expanduser("~/.mcp.json"),
-    os.path.expanduser("~/Library/Application Support/Claude/claude_desktop_config.json"),
-]
-
-
-def count(servers):
-    if not isinstance(servers, dict):
-        return 0
-    n = 0
-    for name, cfg in servers.items():
-        blob = json.dumps(cfg).lower() if isinstance(cfg, dict) else ""
-        if "kemory" in str(name).lower() or "kemory" in blob:
-            n += 1
-    return n
-
-
-total = 0
-for path in candidates:
-    try:
-        with open(path) as fh:
-            data = json.load(fh)
-    except Exception:
-        continue
-    if not isinstance(data, dict):
-        continue
-    total += count(data.get("mcpServers"))
-    for proj in (data.get("projects") or {}).values():
-        if isinstance(proj, dict):
-            total += count(proj.get("mcpServers"))
-print(total)
-PY
+  python3 "$KEMORY_LIB_DIR/kemory_lib.py" count-mcp-entries 2>/dev/null || echo 0
 }
 
 # Has a claude.ai Kemory connector ever connected to Claude Code on this machine?
@@ -401,26 +192,7 @@ PY
 # or non-JSON file, or a key that is not a list.
 kemory_connector_ever_connected() {
   command -v python3 >/dev/null 2>&1 || return 0
-  python3 - <<'PY' 2>/dev/null
-import json, os
-
-try:
-    with open(os.path.expanduser("~/.claude.json")) as fh:
-        data = json.load(fh)
-except Exception:
-    raise SystemExit(0)
-if not isinstance(data, dict):
-    raise SystemExit(0)
-entries = data.get("claudeAiMcpEverConnected")
-if "claudeAiMcpEverConnected" not in data:
-    print("never")
-elif isinstance(entries, list):
-    for entry in entries:
-        if isinstance(entry, str) and "kemory" in entry.lower():
-            print("seen\t" + entry)
-            raise SystemExit(0)
-    print("never")
-PY
+  python3 "$KEMORY_LIB_DIR/kemory_lib.py" connector-ever-connected 2>/dev/null
 }
 
 # Find an MCP server already configured on this machine that points at the SAME
@@ -455,104 +227,7 @@ PY
 kemory_find_duplicate_server() {
   [ -n "${KEMORY_BASE_URL:-}" ] || return 0
   command -v python3 >/dev/null 2>&1 || return 0
-  KEMORY_MINE="$KEMORY_BASE_URL" python3 - <<'PY' 2>/dev/null
-import json, os, shutil, urllib.parse
-
-MINE = urllib.parse.urlparse(os.environ["KEMORY_MINE"]).netloc.lower()
-if not MINE:
-    raise SystemExit(0)
-
-PROJECT = os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
-USER_CONFIG = os.path.expanduser("~/.claude.json")
-candidates = [
-    os.path.join(PROJECT, ".mcp.json"),
-    USER_CONFIG,
-]
-
-
-def same_dir(a, b):
-    try:
-        return os.path.realpath(a) == os.path.realpath(b)
-    except Exception:
-        return False
-
-
-def host_of(url):
-    try:
-        return urllib.parse.urlparse(url).netloc.lower()
-    except Exception:
-        return ""
-
-
-def cli_host(args):
-    """The endpoint `kemory [--env X] mcp serve` would forward to."""
-    env = "prod"
-    for i, a in enumerate(args):
-        if a == "--env" and i + 1 < len(args):
-            env = args[i + 1]
-        elif a.startswith("--env="):
-            env = a.split("=", 1)[1]
-    for name in (f"credentials-{env}", "credentials"):
-        try:
-            with open(os.path.expanduser(f"~/.kemory/{name}")) as fh:
-                return host_of(json.load(fh).get("kemory_url") or "")
-        except Exception:
-            continue
-    return ""
-
-
-def endpoint_of(cfg):
-    if not isinstance(cfg, dict):
-        return ""
-    url = cfg.get("url")
-    if isinstance(url, str) and url:
-        return host_of(url)
-    command = str(cfg.get("command") or "")
-    args = [str(a) for a in (cfg.get("args") or [])]
-    if os.path.basename(command) == "kemory" and "serve" in args:
-        # The host launches this entry with the PATH it gave this process, so a
-        # command we cannot find here cannot start there either. `kemory mcp
-        # install` writes the bare name, and a desktop app's PATH lacks a
-        # Homebrew prefix such as ~/homebrew/bin; yielding to that entry left
-        # the session with no server at all.
-        env = cfg.get("env") if isinstance(cfg.get("env"), dict) else {}
-        if not shutil.which(command, path=env.get("PATH") or os.environ.get("PATH")):
-            return ""
-        return cli_host(args)
-    return ""
-
-
-def scan(servers, path):
-    if not isinstance(servers, dict):
-        return None
-    for name, cfg in servers.items():
-        blob = json.dumps(cfg).lower() if isinstance(cfg, dict) else ""
-        if "kemory" not in str(name).lower() and "kemory" not in blob:
-            continue
-        if endpoint_of(cfg) == MINE:
-            return name, path
-    return None
-
-
-for path in candidates:
-    try:
-        with open(path) as fh:
-            data = json.load(fh)
-    except Exception:
-        continue
-    if not isinstance(data, dict):
-        continue
-    hit = scan(data.get("mcpServers"), path)
-    if not hit and path == USER_CONFIG:
-        projects = data.get("projects")
-        for key, proj in (projects.items() if isinstance(projects, dict) else ()):
-            if isinstance(proj, dict) and same_dir(key, PROJECT):
-                hit = scan(proj.get("mcpServers"), path)
-                break
-    if hit:
-        print(f"{hit[0]}\t{hit[1]}")
-        raise SystemExit(0)
-PY
+  KEMORY_MINE="$KEMORY_BASE_URL" python3 "$KEMORY_LIB_DIR/kemory_lib.py" find-duplicate-server 2>/dev/null
 }
 
 # Ask the HOST whether it has switched our MCP server off.
@@ -588,37 +263,7 @@ PY
 # otherwise, including when the file is absent, unreadable or not JSON.
 kemory_mcp_skipped_at() {
   command -v python3 >/dev/null 2>&1 || return 0
-  python3 - <<'PY' 2>/dev/null
-import json, os
-
-path = os.path.expanduser("~/.claude/mcp-needs-auth-cache.json")
-try:
-    with open(path) as fh:
-        data = json.load(fh)
-except Exception:
-    raise SystemExit(0)
-if not isinstance(data, dict):
-    raise SystemExit(0)
-
-best = None
-for key, entry in data.items():
-    if "kemory" not in str(key).lower():
-        continue
-    if not isinstance(entry, dict):
-        continue
-    stamp = entry.get("timestamp")
-    if not isinstance(stamp, (int, float)):
-        continue
-    # The host writes milliseconds. Guard the units rather than trusting them:
-    # a seconds-valued entry read as milliseconds dates to 1970 and would be
-    # reported as an ancient failure instead of a current one.
-    secs = stamp / 1000.0 if stamp > 1e11 else float(stamp)
-    if best is None or secs > best[1]:
-        best = (str(key), secs)
-
-if best is not None:
-    print(f"{best[0]}\t{int(best[1])}")
-PY
+  python3 "$KEMORY_LIB_DIR/kemory_lib.py" mcp-skipped-at 2>/dev/null
 }
 
 # Ask Grok Build whether the user has switched our MCP server off.
@@ -646,46 +291,7 @@ PY
 kemory_grok_disabled_server() {
   kemory_is_grok || return 0
   command -v python3 >/dev/null 2>&1 || return 0
-  python3 - <<'PY' 2>/dev/null
-import os, re
-
-path = os.path.expanduser("~/.grok/config.toml")
-try:
-    with open(path, "rb") as fh:
-        raw = fh.read()
-except Exception:
-    raise SystemExit(0)
-
-names = None
-try:
-    import tomllib  # Python 3.11+
-except ImportError:
-    tomllib = None
-
-if tomllib is not None:
-    try:
-        names = tomllib.loads(raw.decode("utf-8")).get("disabled_mcp_servers")
-    except Exception:
-        raise SystemExit(0)
-else:
-    # Older Python: read just the top-level key. In TOML that means before the
-    # first table header, so search only that prefix: the same key under a
-    # table, such as [cli], is a different key and Grok would not act on it.
-    # Anything stranger than a flat list of strings is left unreported rather
-    # than guessed at.
-    top = re.split(rb'(?m)^\s*\[', raw, maxsplit=1)[0]
-    m = re.search(rb'(?m)^disabled_mcp_servers\s*=\s*\[([^\]]*)\]', top)
-    if m:
-        pairs = re.findall(r'"([^"]*)"|\'([^\']*)\'', m.group(1).decode("utf-8", "replace"))
-        names = [a or b for a, b in pairs]
-
-if not isinstance(names, list):
-    raise SystemExit(0)
-for name in names:
-    if isinstance(name, str) and (name == "kemory" or name.endswith(":kemory")):
-        print(name)
-        break
-PY
+  python3 "$KEMORY_LIB_DIR/kemory_lib.py" grok-disabled-server 2>/dev/null
 }
 
 # Locate the host's per-cwd MCP log directory for a cache key, on THIS machine.
@@ -704,34 +310,5 @@ PY
 # host that stores logs elsewhere, or logs that have been cleaned up).
 kemory_mcp_log_dir() {
   command -v python3 >/dev/null 2>&1 || return 0
-  KEMORY_LOG_KEY="${1:-}" python3 - <<'PY' 2>/dev/null
-import glob, os
-
-key = os.environ.get("KEMORY_LOG_KEY", "")
-if not key:
-    raise SystemExit(0)
-
-# The host slugifies the cache key into the directory name.
-slug = "".join(c if c.isalnum() else "-" for c in key)
-
-roots = [
-    os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache"),
-    os.path.expanduser("~/Library/Caches"),
-]
-
-best = None
-for root in roots:
-    for path in glob.glob(os.path.join(root, "claude-cli-nodejs", "*", f"mcp-logs-{slug}")):
-        if not os.path.isdir(path):
-            continue
-        try:
-            when = os.path.getmtime(path)
-        except OSError:
-            continue
-        if best is None or when > best[1]:
-            best = (path, when)
-
-if best is not None:
-    print(best[0])
-PY
+  KEMORY_LOG_KEY="${1:-}" python3 "$KEMORY_LIB_DIR/kemory_lib.py" mcp-log-dir 2>/dev/null
 }

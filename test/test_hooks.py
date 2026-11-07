@@ -1641,7 +1641,7 @@ class CredentialTest(unittest.TestCase):
         (p / "credentials-prod").write_text(json.dumps(d))
         return p / "credentials-prod"
 
-    def resolve(self, **env):
+    def resolve(self, cwd=None, **env):
         """Source lib.sh, resolve auth, print what the hooks would send."""
         e = {k: v for k, v in os.environ.items() if not k.startswith("KEMORY_")}
         e["HOME"] = self.home
@@ -1650,7 +1650,7 @@ class CredentialTest(unittest.TestCase):
                   ' && echo "$KEMORY_AUTH_HEADER"'
                   ' ; echo "expired=${KEMORY_TOKEN_EXPIRED:-0}"')
         return run_with_timeout(["bash", "-c", script], text=True,
-                              capture_output=True, env=e)
+                              capture_output=True, env=e, cwd=cwd)
 
     def test_expired_token_is_refreshed_and_persisted(self):
         creds = self.write_creds()
@@ -1660,6 +1660,24 @@ class CredentialTest(unittest.TestCase):
         self.assertEqual(json.loads(creds.read_text())["access_token"],
                          "fresh-token", "the refresh must be written back")
         self.assertIn("expired=0", out)
+
+    def test_resolve_does_not_import_modules_from_the_working_directory(self):
+        # `python3 -c` and `python3 -` put the current directory first on
+        # sys.path, so a json.py in a project root ran inside the program that
+        # holds the refresh token. A program run from a file does not.
+        creds = self.write_creds()
+        cwd = pathlib.Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, cwd, ignore_errors=True)
+        marker = cwd / "marker"
+        (cwd / "json.py").write_text(
+            f"open({str(marker)!r}, 'w').write('ran')\n"
+            "from json import *\n")
+        out = self.resolve(cwd=cwd).stdout
+        self.assertIn("Authorization: Bearer fresh-token", out)
+        self.assertEqual(json.loads(creds.read_text())["access_token"],
+                         "fresh-token")
+        self.assertFalse(marker.exists(),
+                         "a json.py in the working directory must not run")
 
     def org_header(self, **env):
         e = {k: v for k, v in os.environ.items() if not k.startswith("KEMORY_")}
@@ -2443,13 +2461,13 @@ class McpConfigCountTest(unittest.TestCase):
         self.home = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.home, ignore_errors=True)
 
-    def count(self):
+    def count(self, cwd=None):
         e = {k: v for k, v in os.environ.items() if not k.startswith("KEMORY_")}
         e["HOME"] = self.home
         e["CLAUDE_PROJECT_DIR"] = self.home
         r = run_with_timeout(
             ["bash", "-c", f'. "{SCRIPTS}/lib.sh"; kemory_count_mcp_entries'],
-            text=True, capture_output=True, env=e)
+            text=True, capture_output=True, env=e, cwd=cwd)
         return int(r.stdout.strip() or -1)
 
     def write(self, servers, projects=None):
@@ -2475,6 +2493,18 @@ class McpConfigCountTest(unittest.TestCase):
     def test_malformed_config_does_not_break_the_count(self):
         (pathlib.Path(self.home) / ".claude.json").write_text("{not json")
         self.assertEqual(self.count(), 0)
+
+    def test_count_does_not_import_modules_from_the_working_directory(self):
+        self.write({"kemory": {"url": "https://x/mcp/v1"}})
+        cwd = pathlib.Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, cwd, ignore_errors=True)
+        marker = cwd / "marker"
+        (cwd / "json.py").write_text(
+            f"open({str(marker)!r}, 'w').write('ran')\n"
+            "from json import *\n")
+        self.assertEqual(self.count(cwd=cwd), 1)
+        self.assertFalse(marker.exists(),
+                         "a json.py in the working directory must not run")
 
 
 class IdpRecorder(http.server.BaseHTTPRequestHandler):
@@ -4375,7 +4405,8 @@ OUTBOUND_CALL_PATTERN = re.compile(
 # PRIVACY.md says what it sends and to where.
 EXPECTED_OUTBOUND_CALL_SITES = {
     "scripts/capture.sh": 1,
-    "scripts/lib.sh": 2,
+    "scripts/kemory_creds.py": 1,
+    "scripts/lib.sh": 1,
     "scripts/login.py": 3,
     "scripts/mcp_bridge.py": 1,
     "scripts/prompt-recall.sh": 1,
