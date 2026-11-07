@@ -697,12 +697,18 @@ class HookTest(unittest.TestCase):
         "password: hunter2supersecret",
         "AKIAIOSFODNN7EXAMPLE",
         "xoxb-1234567890-abcdefghij",
+        # Plain keys, one after a space and one glued to a word: both must stay
+        # redacted whatever is done to the dashed-key pattern.
+        "my key is " + "sk-" + "abcdefghij1234567890",
+        "url ?q=key%3D" + "sk-" + "abcdefghij1234567890",
     ]
     PROSE = [
         "the token expired yesterday, please regenerate",
         "our secret sauce is caching",
         "add a password field to the signup form",
         "why does the api_key check fail on staging",
+        "multi-task-learning-pipeline-tuning",
+        "check the disk-space-monitoring-dashboard",
     ]
 
     def _captured(self, line):
@@ -727,6 +733,29 @@ class HookTest(unittest.TestCase):
         for s in self.PROSE:
             with self.subTest(prose=s):
                 self.assertNotIn("[REDACTED]", self._captured(s))
+
+    # Anthropic and OpenAI project keys have dashes after "sk-". Built by
+    # concatenation so no complete key-shaped literal sits in the repo.
+    PREFIXED_SK_KEYS = [
+        "sk-ant-" + "api03-" + "Ab1" * 30 + "-xyzAA",
+        "sk-proj-" + "Q7x" * 20,
+        "sk-" + "svcacct-" + "Zz9_" * 10,
+        "sk-" + "A1b2" * 5 + "-tail_" + "B" * 8,
+    ]
+
+    def test_capture_redacts_prefixed_sk_keys(self):
+        for key in self.PREFIXED_SK_KEYS:
+            with self.subTest(key=key[:8]):
+                content = self._captured(f"my key is {key} and the call 401s")
+                self.assertNotIn(key[-12:], content)
+                self.assertIn("[REDACTED]", content)
+
+    def test_prompt_recall_redacts_prefixed_sk_keys(self):
+        for key in self.PREFIXED_SK_KEYS:
+            with self.subTest(key=key[:8]):
+                Recorder.posts.clear()
+                self.recall(prompt=f"deploy fails with {key}, what did we decide")
+                self.assertNotIn(key[-12:], self.searches()[0]["query"])
 
     # --- rate reminder ----------------------------------------------------
     def test_reminder_silent_on_empty_recall(self):

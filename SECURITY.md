@@ -14,7 +14,7 @@ prompts to the Kemory instance you have configured. Review
 that covers, and set the variable to `0` if you do not want it.
 
 **Redaction is best-effort.** `plugin/scripts/capture.sh` strips common secret
-shapes (bearer tokens, `api_key=`/`password=` assignments, `sk-`, `gh*_`,
+shapes (bearer tokens, `api_key=`/`password=` assignments, `sk-` (including `sk-ant-` and `sk-proj-` keys), `gh*_`,
 AWS access key ids, PEM private-key headers) before upload. This is
 pattern-matching, not a guarantee — a novel or unusual secret format can pass
 through. If you work with sensitive material, leave capture disabled.
