@@ -5,6 +5,7 @@ These drive the real scripts with synthetic payloads against a local HTTP
 server, so they exercise the shipped code rather than a copy of its logic.
 Run: python3 test/test_hooks.py
 """
+import ast
 import base64
 import http.server
 import json
@@ -21,9 +22,20 @@ import threading
 import time
 import urllib.parse
 import unittest
+from unittest import mock
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SCRIPTS = ROOT / "plugin" / "scripts"
+
+# A hook that blocks on stdin or a socket must fail its own test, not hold the
+# CI job until GitHub's job limit.
+SUBPROCESS_TIMEOUT = 60
+
+
+def run_with_timeout(cmd, **kwargs):
+    """subprocess.run with SUBPROCESS_TIMEOUT unless the caller set a timeout."""
+    kwargs.setdefault("timeout", SUBPROCESS_TIMEOUT)
+    return subprocess.run(cmd, **kwargs)
 
 # Copied verbatim from the INJECTED constant in hooks/register.tsx of the
 # kemory-plus repo, which parses prompt-recall.sh's output to build its memory
@@ -232,7 +244,7 @@ class HookTest(unittest.TestCase):
         return e
 
     def run_script(self, name, payload, **env):
-        return subprocess.run([str(SCRIPTS / name)], input=json.dumps(payload),
+        return run_with_timeout([str(SCRIPTS / name)], input=json.dumps(payload),
                               text=True, capture_output=True, env=self.env(**env))
 
     def write_credentials(self, kemory_url, env="prod"):
@@ -249,7 +261,7 @@ class HookTest(unittest.TestCase):
         """Drive the shipped lib.sh and report what it resolved."""
         e = self.env()
         e.pop("KEMORY_URL", None)  # force the credentials-file path
-        r = subprocess.run(
+        r = run_with_timeout(
             ["bash", "-c",
              f'. "{SCRIPTS / "lib.sh"}"; kemory_resolve_auth || exit 1; '
              'printf "%s\n%s\n" "$KEMORY_BASE_URL" "${KEMORY_URL_RETARGETED_FROM:-}"'],
@@ -767,7 +779,7 @@ class HookTest(unittest.TestCase):
         # Fail CLOSED, not open: the matcher covers the whole kemory_* recall
         # family, so an unparseable non-recall response must not produce a
         # reminder to rate memories that were never recalled.
-        r = subprocess.run([str(SCRIPTS / "rate-reminder.sh")], input="not json",
+        r = run_with_timeout([str(SCRIPTS / "rate-reminder.sh")], input="not json",
                            text=True, capture_output=True, env=self.env())
         self.assertEqual(r.stdout.strip(), "")
 
@@ -1429,7 +1441,7 @@ class HookTest(unittest.TestCase):
         CLI, so it must be covered by the same rewrite.
         """
         e = self.env(KEMORY_API_KEY="k", KEMORY_URL=self.RETIRED_URL)
-        r = subprocess.run(
+        r = run_with_timeout(
             ["bash", "-c",
              f'. "{SCRIPTS / "lib.sh"}"; kemory_resolve_auth || exit 1; '
              'printf "%s\n%s\n" "$KEMORY_BASE_URL" "${KEMORY_URL_RETARGETED_FROM:-}"'],
@@ -1457,7 +1469,7 @@ class HookTest(unittest.TestCase):
 
         self.write_credentials(self.RETIRED_URL)
         e = self.env(PATH=path); e.pop("KEMORY_URL", None)
-        r = subprocess.run([str(SCRIPTS / "status.sh")], input="{}", text=True,
+        r = run_with_timeout([str(SCRIPTS / "status.sh")], input="{}", text=True,
                            capture_output=True, env=e)
         self.assertIn("kemory login", r.stdout)
         self.assertNotIn("KEMORY_URL is set", r.stdout)
@@ -1637,7 +1649,7 @@ class CredentialTest(unittest.TestCase):
         script = (f'. "{SCRIPTS}/lib.sh"; kemory_resolve_auth'
                   ' && echo "$KEMORY_AUTH_HEADER"'
                   ' ; echo "expired=${KEMORY_TOKEN_EXPIRED:-0}"')
-        return subprocess.run(["bash", "-c", script], text=True,
+        return run_with_timeout(["bash", "-c", script], text=True,
                               capture_output=True, env=e)
 
     def test_expired_token_is_refreshed_and_persisted(self):
@@ -1655,7 +1667,7 @@ class CredentialTest(unittest.TestCase):
         e.update(env)
         script = (f'. "{SCRIPTS}/lib.sh"; kemory_resolve_auth'
                   ' && echo "org=[${KEMORY_ORG_HEADER}]"')
-        return subprocess.run(["bash", "-c", script], text=True,
+        return run_with_timeout(["bash", "-c", script], text=True,
                               capture_output=True, env=e).stdout.strip()
 
     def test_hooks_follow_the_organisation_kemory_use_selected(self):
@@ -1704,7 +1716,7 @@ class CredentialTest(unittest.TestCase):
         self.write_creds(expires_at=time.time() + 3600, active_org_id="org-b")
         e = {k: v for k, v in os.environ.items() if not k.startswith("KEMORY_")}
         e["HOME"] = self.home
-        subprocess.run([str(SCRIPTS / "prompt-recall.sh")], text=True,
+        run_with_timeout([str(SCRIPTS / "prompt-recall.sh")], text=True,
                        capture_output=True, env=e, timeout=30,
                        input=json.dumps({"session_id": "s", "hook_event_name": "UserPromptSubmit",
                                          "prompt": "where does the kemory plugin keep its credential?"}))
@@ -1743,7 +1755,7 @@ class CredentialTest(unittest.TestCase):
     def session_start(self):
         e = {k: v for k, v in os.environ.items() if not k.startswith("KEMORY_")}
         e.update({"HOME": self.home, "CLAUDE_PROJECT_DIR": self.home})
-        r = subprocess.run([str(SCRIPTS / "session-start.sh")], input="{}",
+        r = run_with_timeout([str(SCRIPTS / "session-start.sh")], input="{}",
                            text=True, capture_output=True, env=e)
         return json.loads(r.stdout)
 
@@ -1793,14 +1805,14 @@ class CredentialTest(unittest.TestCase):
         creds.write_text('"access_token": "x"}')
         e = {k: v for k, v in os.environ.items() if not k.startswith("KEMORY_")}
         e["HOME"] = self.home
-        r = subprocess.run(
+        r = run_with_timeout(
             ["bash", "-c", f'. "{SCRIPTS}/lib.sh"; kemory_resolve_auth;'
              ' echo "rc=$? corrupt=${KEMORY_CREDS_CORRUPT:-}"'],
             text=True, capture_output=True, env=e)
         self.assertIn("rc=1", r.stdout)
         self.assertIn(f"corrupt={creds}", r.stdout)
 
-        r = subprocess.run([str(SCRIPTS / "mcp.sh")], input="", text=True,
+        r = run_with_timeout([str(SCRIPTS / "mcp.sh")], input="", text=True,
                            capture_output=True, env=e)
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("not valid JSON", r.stderr)
@@ -1840,7 +1852,7 @@ class CredentialTest(unittest.TestCase):
         script = (f'. "{SCRIPTS}/lib.sh"; kemory_find_mcp_config_key')
         e = {k: v for k, v in os.environ.items() if not k.startswith("KEMORY_")}
         e.update({"HOME": self.home, "CLAUDE_PROJECT_DIR": self.home})
-        found = subprocess.run(["bash", "-c", script], text=True,
+        found = run_with_timeout(["bash", "-c", script], text=True,
                                capture_output=True, env=e).stdout
         self.assertIn(".mcp.json", found)
         self.assertNotIn("kemory_secret", found,
@@ -1854,7 +1866,7 @@ class CredentialTest(unittest.TestCase):
         script = f'. "{SCRIPTS}/lib.sh"; kemory_find_mcp_config_key'
         e = {k: v for k, v in os.environ.items() if not k.startswith("KEMORY_")}
         e.update({"HOME": self.home, "CLAUDE_PROJECT_DIR": self.home})
-        r = subprocess.run(["bash", "-c", script], text=True,
+        r = run_with_timeout(["bash", "-c", script], text=True,
                            capture_output=True, env=e)
         self.assertEqual(r.stdout.strip(), "")
 
@@ -1863,7 +1875,7 @@ class CredentialTest(unittest.TestCase):
         # to brew install. Whatever it says, it must not say that.
         e = {k: v for k, v in os.environ.items() if not k.startswith("KEMORY_")}
         e.update({"HOME": self.home, "CLAUDE_PROJECT_DIR": self.home})
-        r = subprocess.run([str(SCRIPTS / "session-start.sh")], input="{}",
+        r = run_with_timeout([str(SCRIPTS / "session-start.sh")], input="{}",
                            text=True, capture_output=True, env=e)
         msg = json.loads(r.stdout)["systemMessage"]
         self.assertNotIn("no memory backend", msg)
@@ -1879,7 +1891,7 @@ class CredentialTest(unittest.TestCase):
         e.update({"HOME": self.home, "CLAUDE_PROJECT_DIR": self.home,
                   # A PATH with no kemory on it.
                   "PATH": "/usr/bin:/bin:/usr/sbin:/sbin"})
-        r = subprocess.run([str(SCRIPTS / "session-start.sh")], input="{}",
+        r = run_with_timeout([str(SCRIPTS / "session-start.sh")], input="{}",
                            text=True, capture_output=True, env=e)
         msg = json.loads(r.stdout)["systemMessage"]
         self.assertIn("/kemory:login", msg)
@@ -1893,7 +1905,7 @@ class CredentialTest(unittest.TestCase):
             "headers": {"X-API-Key": "kemory_secret"}}}})
         e = {k: v for k, v in os.environ.items() if not k.startswith("KEMORY_")}
         e.update({"HOME": self.home, "CLAUDE_PROJECT_DIR": self.home})
-        r = subprocess.run([str(SCRIPTS / "session-start.sh")], input="{}",
+        r = run_with_timeout([str(SCRIPTS / "session-start.sh")], input="{}",
                            text=True, capture_output=True, env=e)
         msg = json.loads(r.stdout)["systemMessage"]
         self.assertIn(".mcp.json", msg)
@@ -1953,7 +1965,7 @@ class McpEntryTest(unittest.TestCase):
         return e
 
     def run_mcp(self, lines, with_cli=False, **extra):
-        return subprocess.run([str(SCRIPTS / "mcp.sh")],
+        return run_with_timeout([str(SCRIPTS / "mcp.sh")],
                               input="".join(l + "\n" for l in lines),
                               text=True, capture_output=True,
                               env=self.env(with_cli, **extra))
@@ -2277,7 +2289,7 @@ class McpEntryTest(unittest.TestCase):
         entry = pathlib.Path(work) / "plugin/.mcp.json"
 
         def guard():
-            return subprocess.run(["python3", "scripts/check_mcp_entry.py"],
+            return run_with_timeout(["python3", "scripts/check_mcp_entry.py"],
                                   cwd=work, text=True, capture_output=True)
 
         self.assertEqual(guard().returncode, 0, "the shipped entry must pass")
@@ -2325,7 +2337,7 @@ class StaleVersionNoticeTest(unittest.TestCase):
              if not k.startswith("KEMORY_") and k != "CLAUDE_CODE_ENTRYPOINT"}
         e.update({"HOME": self.home, "KEMORY_URL": "http://127.0.0.1:1"})
         e.update(extra)
-        return subprocess.run([str(SCRIPTS / "session-start.sh")], input="{}",
+        return run_with_timeout([str(SCRIPTS / "session-start.sh")], input="{}",
                               text=True, capture_output=True, env=e)
 
     def message(self, r):
@@ -2435,7 +2447,7 @@ class McpConfigCountTest(unittest.TestCase):
         e = {k: v for k, v in os.environ.items() if not k.startswith("KEMORY_")}
         e["HOME"] = self.home
         e["CLAUDE_PROJECT_DIR"] = self.home
-        r = subprocess.run(
+        r = run_with_timeout(
             ["bash", "-c", f'. "{SCRIPTS}/lib.sh"; kemory_count_mcp_entries'],
             text=True, capture_output=True, env=e)
         return int(r.stdout.strip() or -1)
@@ -2599,7 +2611,7 @@ class DeviceLoginTest(unittest.TestCase):
         e = {k: v for k, v in os.environ.items() if not k.startswith("KEMORY_")}
         e.update({"HOME": self.home, "KEMORY_URL": self.base})
         e.update(env)
-        return subprocess.run([str(SCRIPTS / "login.sh")], text=True,
+        return run_with_timeout([str(SCRIPTS / "login.sh")], text=True,
                               capture_output=True, env=e, timeout=60)
 
     def creds(self, env="prod"):
@@ -2807,13 +2819,18 @@ class DeviceLoginTest(unittest.TestCase):
             text=True, env=e,
             preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_DFL))
         self.addCleanup(proc.kill)
-        for line in proc.stdout:
-            if "Waiting" in line:
-                break
-        else:
-            self.fail("login never printed Waiting")
-        proc.send_signal(signal.SIGINT)
-        err = proc.stderr.read()
+        watchdog = threading.Timer(SUBPROCESS_TIMEOUT, proc.kill)
+        watchdog.start()
+        try:
+            for line in proc.stdout:
+                if "Waiting" in line:
+                    break
+            else:
+                self.fail("login never printed Waiting")
+            proc.send_signal(signal.SIGINT)
+            err = proc.stderr.read()
+        finally:
+            watchdog.cancel()
         proc.wait(timeout=30)
         self.assertEqual(proc.returncode, 1, err)
         self.assertIn("sign-in cancelled", err)
@@ -2872,7 +2889,7 @@ class DeviceLoginTest(unittest.TestCase):
         e["HOME"] = self.home
         script = (f'. "{SCRIPTS}/lib.sh"; kemory_resolve_auth || exit 1; '
                   'echo "$KEMORY_AUTH_HEADER"; echo "url=$KEMORY_BASE_URL"')
-        r = subprocess.run(["bash", "-c", script], text=True,
+        r = run_with_timeout(["bash", "-c", script], text=True,
                            capture_output=True, env=e)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("Authorization: Bearer ", r.stdout,
@@ -2884,14 +2901,14 @@ class DeviceLoginTest(unittest.TestCase):
         # mcp.sh refuses to start without a credential; after signing in it must
         # stop refusing, or the tools stay missing for exactly the user this
         # feature is for.
-        before = subprocess.run(
+        before = run_with_timeout(
             [str(SCRIPTS / "mcp.sh")], input="", text=True, capture_output=True,
             env={**{k: v for k, v in os.environ.items() if not k.startswith("KEMORY_")},
                  "HOME": self.home, "KEMORY_URL": self.base})
         self.assertEqual(before.returncode, 1, "no credential yet")
         self.assertIn("no credential", before.stderr)
         self.run_login()
-        after = subprocess.run(
+        after = run_with_timeout(
             [str(SCRIPTS / "mcp.sh")], input="", text=True, capture_output=True,
             env={**{k: v for k, v in os.environ.items() if not k.startswith("KEMORY_")},
                  "HOME": self.home, "KEMORY_URL": self.base,
@@ -2956,7 +2973,7 @@ class DuplicateServerTest(unittest.TestCase):
             "issuer": "https://issuer.invalid/realms/x", "env": env, "version": 2}))
 
     def launch(self, **extra):
-        return subprocess.run([str(SCRIPTS / "mcp.sh")], input="", text=True,
+        return run_with_timeout([str(SCRIPTS / "mcp.sh")], input="", text=True,
                               capture_output=True, env=self.env(**extra))
 
     def fake_kemory_dir(self):
@@ -3108,7 +3125,7 @@ class DuplicateServerTest(unittest.TestCase):
         # A tick in /kemory:status beside a server that quietly declines to
         # start is the exact lie this section was already fixed for once.
         self.write_config({"kemory": {"type": "http", "url": f"{self.mine}/mcp/v1"}})
-        r = subprocess.run([str(SCRIPTS / "status.sh")], input="{}", text=True,
+        r = run_with_timeout([str(SCRIPTS / "status.sh")], input="{}", text=True,
                            capture_output=True, env=self.env())
         self.assertIn("stand down", r.stdout)
         self.assertIn("hooks are unaffected", r.stdout)
@@ -3116,7 +3133,7 @@ class DuplicateServerTest(unittest.TestCase):
     def test_status_does_not_cry_duplicate_for_another_env(self):
         self.write_config({"kemory-staging": {
             "type": "http", "url": "https://api.kemory.staging.s9n.ai/mcp/v1"}})
-        r = subprocess.run([str(SCRIPTS / "status.sh")], input="{}", text=True,
+        r = run_with_timeout([str(SCRIPTS / "status.sh")], input="{}", text=True,
                            capture_output=True, env=self.env())
         self.assertNotIn("stand down", r.stdout)
         self.assertIn("pointing elsewhere", r.stdout)
@@ -3127,7 +3144,7 @@ class DuplicateServerTest(unittest.TestCase):
         self.write_config({"kemory": {"type": "http", "url": f"{self.mine}/mcp/v1"}})
         e = self.env()
         del e["KEMORY_API_KEY"]
-        r = subprocess.run([str(SCRIPTS / "mcp.sh")], input="", text=True,
+        r = run_with_timeout([str(SCRIPTS / "mcp.sh")], input="", text=True,
                            capture_output=True, env=e)
         self.assertEqual(r.returncode, 1)
         self.assertIn("no credential", r.stderr)
@@ -3219,7 +3236,7 @@ class MuseTranscriptTest(unittest.TestCase):
         return e
 
     def run_hook(self, script, payload, muse=True, **env):
-        return subprocess.run(["bash", str(SCRIPTS / script)], input=json.dumps(payload),
+        return run_with_timeout(["bash", str(SCRIPTS / script)], input=json.dumps(payload),
                               text=True, capture_output=True, env=self.env(muse, **env))
 
     def lay_out_log(self, session_id, lines=None, day="2026/10/20"):
@@ -3441,11 +3458,11 @@ class SkippedServerTest(unittest.TestCase):
                                        "url": f"{self.mine}/mcp/v1"}}}))
 
     def status(self):
-        return subprocess.run([str(SCRIPTS / "status.sh")], input="{}",
+        return run_with_timeout([str(SCRIPTS / "status.sh")], input="{}",
                               text=True, capture_output=True, env=self.env())
 
     def session_start(self):
-        r = subprocess.run([str(SCRIPTS / "session-start.sh")],
+        r = run_with_timeout([str(SCRIPTS / "session-start.sh")],
                            input=json.dumps({"source": "startup"}),
                            text=True, capture_output=True, env=self.env())
         try:
@@ -3526,7 +3543,7 @@ class SkippedServerTest(unittest.TestCase):
         # A warning that costs the session its context injection would be a
         # worse trade than the silence it replaced.
         self.write_cache(age_seconds=120)
-        r = subprocess.run([str(SCRIPTS / "session-start.sh")],
+        r = run_with_timeout([str(SCRIPTS / "session-start.sh")],
                            input=json.dumps({"source": "startup"}),
                            text=True, capture_output=True, env=self.env())
         out = json.loads(r.stdout)
@@ -3664,11 +3681,11 @@ class GrokDisabledServerTest(unittest.TestCase):
         self.config.write_text(f"disabled_mcp_servers = [{listed}]\n\n[cli]\ninstaller = \"internal\"\n")
 
     def status(self, **kw):
-        return subprocess.run([str(SCRIPTS / "status.sh")], input="{}",
+        return run_with_timeout([str(SCRIPTS / "status.sh")], input="{}",
                               text=True, capture_output=True, env=self.env(**kw))
 
     def session_start(self, **kw):
-        r = subprocess.run([str(SCRIPTS / "session-start.sh")],
+        r = run_with_timeout([str(SCRIPTS / "session-start.sh")],
                            input=json.dumps({"source": "startup"}),
                            text=True, capture_output=True, env=self.env(**kw))
         try:
@@ -3770,7 +3787,7 @@ class GrokDisabledServerTest(unittest.TestCase):
         shutil.copytree(ROOT / "plugin", dest)
         e = self.env()
         e.pop("CLAUDE_PLUGIN_ROOT", None)
-        r = subprocess.run([str(dest / "scripts" / "status.sh")], input="{}",
+        r = run_with_timeout([str(dest / "scripts" / "status.sh")], input="{}",
                            text=True, capture_output=True, env=e)
         self.assertIn("switched off", r.stdout)
 
@@ -3813,11 +3830,11 @@ class ConnectorStatusTest(unittest.TestCase):
         self.config.write_text(json.dumps(blob))
 
     def status(self, **extra):
-        return subprocess.run([str(SCRIPTS / "status.sh")], input="{}", text=True,
+        return run_with_timeout([str(SCRIPTS / "status.sh")], input="{}", text=True,
                               capture_output=True, env=self.env(**extra))
 
     def launch(self, **extra):
-        return subprocess.run([str(SCRIPTS / "mcp.sh")], input="", text=True,
+        return run_with_timeout([str(SCRIPTS / "mcp.sh")], input="", text=True,
                               capture_output=True, env=self.env(**extra))
 
     def assertCouldNotTell(self, r):
@@ -3958,7 +3975,7 @@ class ReleaseScriptTest(unittest.TestCase):
         (self.root / "changes" / name).write_text(text)
 
     def run_release(self, *args):
-        return subprocess.run([sys.executable, str(ROOT / "scripts" / "release.py"),
+        return run_with_timeout([sys.executable, str(ROOT / "scripts" / "release.py"),
                                "--root", str(self.root), *args],
                               text=True, capture_output=True)
 
@@ -4016,7 +4033,7 @@ class ReleaseScriptTest(unittest.TestCase):
         self.assertIn("[Unreleased]", r.stdout)
 
     def test_repo_fragments_pass_the_check(self):
-        r = subprocess.run([sys.executable, str(ROOT / "scripts" / "release.py"), "--check"],
+        r = run_with_timeout([sys.executable, str(ROOT / "scripts" / "release.py"), "--check"],
                            text=True, capture_output=True)
         self.assertEqual(r.returncode, 0, r.stdout)
 
@@ -4046,7 +4063,7 @@ class CursorPluginTest(unittest.TestCase):
         return f"{bin_dir}:/usr/bin:/bin"
 
     def run_hook(self, arg, path, payload='{"hook_event_name":"sessionStart"}'):
-        return subprocess.run(["bash", str(self.HOOK), arg], input=payload, text=True,
+        return run_with_timeout(["bash", str(self.HOOK), arg], input=payload, text=True,
                               capture_output=True, env={"PATH": path, "HOME": str(self.tmp)})
 
     def test_silent_no_op_without_kemory_on_path(self):
@@ -4164,7 +4181,7 @@ class MusePluginTest(unittest.TestCase):
         return json.loads((MUSE_FIXTURES / name).read_text())
 
     def run_muse(self, script, payload, muse=True):
-        return subprocess.run(["bash", str(SCRIPTS / script)], input=json.dumps(payload),
+        return run_with_timeout(["bash", str(SCRIPTS / script)], input=json.dumps(payload),
                               text=True, capture_output=True, env=self.muse_env(muse))
 
     def test_manifest_parses_with_schema_version_1_and_native_compat(self):
@@ -4304,7 +4321,7 @@ class MusePluginTest(unittest.TestCase):
             {"mcpServers": {"kemory": {"type": "http", "url": f"{self.mine}/mcp/v1"}}}))
 
     def launch_mcp(self, muse):
-        return subprocess.run(["bash", str(SCRIPTS / "mcp.sh")], input="", text=True,
+        return run_with_timeout(["bash", str(SCRIPTS / "mcp.sh")], input="", text=True,
                               capture_output=True, env=self.muse_env(muse))
 
     def test_mcp_under_muse_env_serves_despite_claude_config_entry(self):
@@ -4545,6 +4562,41 @@ class PluginDependencyTest(unittest.TestCase):
         self.assertEqual(
             plugin_dependency_violations("a.sh", "cat test/fixtures/x.json", set()),
             ["a.sh: names test/fixtures/x.json"])
+
+
+class SubprocessTimeoutTest(unittest.TestCase):
+    def test_every_subprocess_call_in_this_file_is_bounded(self):
+        path = pathlib.Path(__file__)
+        tree = ast.parse(path.read_text(), str(path))
+        helper = next(n for n in tree.body
+                      if isinstance(n, ast.FunctionDef) and n.name == "run_with_timeout")
+        inside = {id(c) for c in ast.walk(helper)}
+        direct = {"run", "call", "check_call", "check_output"}
+        problems = []
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
+                continue
+            f = node.func
+            if (isinstance(f.value, ast.Name) and f.value.id == "subprocess"
+                    and f.attr in direct and id(node) not in inside):
+                problems.append(f"line {node.lineno}: subprocess.{f.attr} outside run_with_timeout")
+            if f.attr in ("wait", "communicate") and not any(
+                    k.arg == "timeout" for k in node.keywords):
+                problems.append(f"line {node.lineno}: .{f.attr}() without timeout=")
+        self.assertEqual(problems, [])
+
+    def test_a_script_that_never_exits_fails_within_the_timeout(self):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+        script = pathlib.Path(d) / "hang.sh"
+        # exec, so the process subprocess kills is the sleep itself.
+        script.write_text("#!/bin/bash\nexec sleep 30\n")
+        script.chmod(0o755)
+        start = time.monotonic()
+        with mock.patch.object(sys.modules[__name__], "SUBPROCESS_TIMEOUT", 2):
+            with self.assertRaises(subprocess.TimeoutExpired):
+                run_with_timeout([str(script)], capture_output=True)
+        self.assertLess(time.monotonic() - start, 10)
 
 
 if __name__ == "__main__":
