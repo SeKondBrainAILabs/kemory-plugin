@@ -769,6 +769,27 @@ class HookTest(unittest.TestCase):
                 self.recall(prompt=f"deploy fails with {key}, what did we decide")
                 self.assertNotIn(key[-12:], self.searches()[0]["query"])
 
+    # A dashed sk- name followed by a secret the keyword, JWT or PEM patterns
+    # catch: the name must not hide that secret. Built by concatenation.
+    SK_NAME_THEN_SECRET = [
+        ("sk-prod-db-" + "password: " + "hunter2hunter2", "hunter2hunter2"),
+        ("export SK-STAGING-" + "API_TOKEN=" + "abcdef123456", "abcdef123456"),
+        ("sk-" + "a" * 16 + "-token=" + "supersecretvalue", "supersecretvalue"),
+        ("sk-" + "build-cache-key-" + "eyJ" + "h" * 12 + "." + "p" * 12 + "."
+         + "SIG" * 4, "SIG" * 4),
+        ("sk-" + "deploy-host-ssh-key" + "-----BEGIN RSA " + "PRIVATE KEY-----",
+         "PRIVATE KEY-----"),
+        ("sk-proj-" + "Q7x" * 5 + "sk-" + "A" * 16 + "_" + "TAIL" * 3,
+         "TAIL" * 3),
+    ]
+
+    def test_dashed_sk_name_does_not_hide_the_secret_after_it(self):
+        for text, fragment in self.SK_NAME_THEN_SECRET:
+            with self.subTest(text=text[:16]):
+                content = self._captured(text)
+                self.assertNotIn(fragment, content)
+                self.assertIn("[REDACTED]", content)
+
     # --- rate reminder ----------------------------------------------------
     def test_reminder_silent_on_empty_recall(self):
         r = self.run_script("rate-reminder.sh",
