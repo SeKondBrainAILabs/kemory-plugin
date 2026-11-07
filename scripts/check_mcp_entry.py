@@ -48,7 +48,6 @@ from __future__ import annotations
 import json
 import os
 import pathlib
-import sys
 
 ENTRY = pathlib.Path("plugin/.mcp.json")
 LAUNCHER = pathlib.Path("plugin/scripts/mcp.sh")

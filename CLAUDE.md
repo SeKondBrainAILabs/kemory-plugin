@@ -90,6 +90,10 @@ PATH is a wrapper that rejects `claude plugin validate` (`unknown option '--mode
 so that step shows FAIL for both manifests even on a clean `main`. Compare against
 `main` before treating it as a regression.
 
+The "python lint (ruff)" step runs `ruff check .` (F and B rules, `ruff.toml`). It uses
+a `ruff` on PATH only if it is 0.17.4, else `pipx run --spec ruff==0.17.4 ruff`, which is
+how CI gets it; with neither it fails. Bump the pin in `check.sh` deliberately.
+
 `python3 test/test_hooks.py` alone takes over 2 minutes. While iterating, run one class:
 `python3 test/test_hooks.py ClassName`.
 
