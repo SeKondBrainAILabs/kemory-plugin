@@ -131,6 +131,24 @@ while IFS= read -r s; do
 done < <(jq -r '.hooks[][].hooks[].command | select(contains("CLAUDE_PLUGIN_ROOT"))' \
           plugin/hooks/hooks.json | awk '{print $1}')
 
+# F and B rules, pinned to one ruff version so a new release cannot turn main
+# red. A PATH ruff is used only when it is that version; else pipx runs it.
+echo "→ python lint (ruff)"
+ruff_version=0.17.4
+ruff_cmd=()
+if command -v ruff >/dev/null 2>&1 && [ "$(ruff --version 2>/dev/null)" = "ruff $ruff_version" ]; then
+  ruff_cmd=(ruff)
+elif command -v pipx >/dev/null 2>&1; then
+  ruff_cmd=(pipx run --spec "ruff==$ruff_version" ruff)
+fi
+if [ "${#ruff_cmd[@]}" -eq 0 ]; then
+  echo "  FAIL ruff not found (install ruff or pipx)"; fail=1
+elif ruff_out=$("${ruff_cmd[@]}" check . 2>&1); then
+  echo "  ok   ruff $ruff_version, F and B rules"
+else
+  echo "  FAIL ruff found problems:"; printf '%s\n' "$ruff_out" | sed 's/^/    /'; fail=1
+fi
+
 echo "→ hook behaviour tests"
 if python3 test/test_hooks.py >/tmp/kemory-tests.log 2>&1; then
   echo "  ok   $(grep -oE 'Ran [0-9]+ tests' /tmp/kemory-tests.log) passed"
