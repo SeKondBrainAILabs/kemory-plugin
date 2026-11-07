@@ -728,6 +728,108 @@ class HookTest(unittest.TestCase):
             with self.subTest(prose=s):
                 self.assertNotIn("[REDACTED]", self._captured(s))
 
+    # Fake key material only: the repo is public.
+    KEY_BODY = ["MIIEpAIBAAKCAQEA" + "q" * 60, "zzzz" * 16 + "wxyz"]
+
+    def _pem(self, label, headers="", body=None, tail=""):
+        body = self.KEY_BODY if body is None else body
+        return (f"-----BEGIN {label}-----\n{headers}" + "\n".join(body) + tail
+                + f"\n-----END {label}-----")
+
+    def test_capture_redacts_the_private_key_body(self):
+        # Redacting only the BEGIN line leaves the key material in the upload.
+        body = "MIIEpAIBAAKCAQEA" + "q" * 60
+        pem = (f"-----BEGIN RSA PRIVATE KEY-----\n{body}\n"
+               "-----END RSA PRIVATE KEY-----")
+        content = self._captured(f"why does this key fail: {pem}")
+        self.assertNotIn(body, content)
+
+    def test_capture_redacts_every_private_key_format(self):
+        pgp_body = self.KEY_BODY + ["=abcd"]
+        blocks = {
+            "rsa": self._pem("RSA PRIVATE KEY"),
+            "pkcs8": self._pem("PRIVATE KEY"),
+            "ec": self._pem("EC PRIVATE KEY"),
+            "openssh": self._pem("OPENSSH PRIVATE KEY"),
+            "encrypted pkcs8": self._pem("ENCRYPTED PRIVATE KEY"),
+            "encrypted rsa": self._pem(
+                "RSA PRIVATE KEY",
+                headers="Proc-Type: 4,ENCRYPTED\nDEK-Info: AES-128-CBC,"
+                        + "0123456789ABCDEF" * 2 + "\n\n"),
+            "pgp": self._pem("PGP PRIVATE KEY BLOCK",
+                             headers="Version: GnuPG v2\n\n", body=pgp_body),
+            "space-joined": ("-----BEGIN RSA PRIVATE KEY----- " + " ".join(self.KEY_BODY)
+                             + " -----END RSA PRIVATE KEY-----"),
+        }
+        for name, block in blocks.items():
+            with self.subTest(format=name):
+                content = self._captured(f"why does this key fail: {block} thanks")
+                for line in self.KEY_BODY:
+                    self.assertNotIn(line, content)
+                self.assertNotIn("BEGIN", content)
+                self.assertNotIn("END ", content)
+                self.assertNotIn("DEK-Info", content)
+                self.assertIn("[REDACTED] thanks", content)
+                self.assertEqual(content.count("[REDACTED]"), 1)
+
+    def test_capture_keeps_public_keys_and_certificates(self):
+        for label in ("PUBLIC KEY", "CERTIFICATE"):
+            with self.subTest(label=label):
+                content = self._captured(f"is this ok: {self._pem(label)} thanks")
+                self.assertNotIn("[REDACTED]", content)
+                for line in self.KEY_BODY:
+                    self.assertIn(line, content)
+
+    def test_capture_redacts_a_private_key_after_a_keyword(self):
+        # The keyword alternative of SECRET starts earlier in the text than the
+        # BEGIN line and would otherwise eat only "-----BEGIN".
+        pem = self._pem("RSA PRIVATE KEY")
+        for prefix in ("JWT_SECRET=", "password=", "password: ", "token: ",
+                       'client_secret: "'):
+            with self.subTest(prefix=prefix):
+                content = self._captured(f"set {prefix}{pem} done")
+                for line in self.KEY_BODY:
+                    self.assertNotIn(line, content)
+                self.assertIn("done", content)
+
+    def test_capture_redacts_a_json_escaped_private_key(self):
+        # A service-account file pasted whole: newlines are a literal backslash-n.
+        b1, b2 = self.KEY_BODY
+        head = '{"private_key": "-----BEGIN PRIVATE KEY-----\\n' + b1 + '\\n' + b2
+        cases = {
+            "terminated": head + '\\n-----END PRIVATE KEY-----\\n", "client_email": "a@b.c"}',
+            "unterminated": head,
+        }
+        for name, turn in cases.items():
+            with self.subTest(case=name):
+                content = self._captured(turn)
+                self.assertNotIn(b1, content)
+                self.assertNotIn(b2, content)
+                if name == "terminated":
+                    self.assertIn("client_email", content)
+
+    def test_capture_redacts_an_unterminated_private_key(self):
+        # A truncated paste has no END line: the base64 after BEGIN still goes,
+        # ordinary text after it stays.
+        b1, b2 = "A" * 76, "B" * 75 + "="
+        block = f"-----BEGIN RSA PRIVATE KEY-----\n{b1}\n{b2}"
+        Recorder.posts.clear()
+        self.run_script("capture.sh",
+                        {"session_id": "unterminated-two-turns",
+                         "transcript_path": self.transcript(block, "what about caching")},
+                        KEMORY_API_KEY="k", KEMORY_AUTO_CAPTURE="1",
+                        KEMORY_MIN_NEW_TURNS="1")
+        content = Recorder.posts[0][1]["content"]
+        self.assertNotIn(b1, content)
+        self.assertNotIn(b2, content)
+        self.assertIn("what about caching", content)
+        with self.subTest(case="same turn"):
+            note = "Note: I cut it off here, what is wrong?"
+            content = self._captured(f"{block}\n{note}")
+            self.assertNotIn(b1, content)
+            self.assertNotIn(b2, content)
+            self.assertIn(note, content)
+
     # --- rate reminder ----------------------------------------------------
     def test_reminder_silent_on_empty_recall(self):
         r = self.run_script("rate-reminder.sh",
@@ -1138,6 +1240,14 @@ class HookTest(unittest.TestCase):
         self.recall(prompt="deploy failed, GH_TOKEN=ghp_AAAAAAAAAAAAAAAAAAAAAAAA is stale")
         self.assertIn("[REDACTED]", self.searches()[0]["query"])
         self.assertNotIn("ghp_AAAA", self.searches()[0]["query"])
+
+    def test_prompt_recall_redacts_a_private_key_body(self):
+        pem = self._pem("RSA PRIVATE KEY")
+        self.recall(prompt=f"why does this key fail: {pem} thanks")
+        query = self.searches()[0]["query"]
+        self.assertIn("[REDACTED]", query)
+        for line in self.KEY_BODY:
+            self.assertNotIn(line, query)
 
     def test_prompt_recall_silent_on_short_prompt(self):
         self.assertEqual(self.recall(prompt="ok").stdout.strip(), "")
