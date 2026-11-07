@@ -30,7 +30,8 @@ Thanks for helping improve the Kemory plugin. By taking part you agree to the
 ./scripts/check.sh
 ```
 
-This validates every JSON manifest and shell script. CI runs the same script.
+This validates every JSON manifest and shell script, and lints the Python with
+ruff (F and B rules). CI runs the same script.
 
 Describe a change for users in a changelog fragment, `changes/<topic>.md`,
 not in `CHANGELOG.md`. [changes/README.md](changes/README.md) has the format

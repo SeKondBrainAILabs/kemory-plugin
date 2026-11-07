@@ -309,4 +309,4 @@ if __name__ == "__main__":
         main()
     except KeyboardInterrupt:
         print("\nkemory: sign-in cancelled.", file=sys.stderr)
-        raise SystemExit(1)
+        raise SystemExit(1) from None

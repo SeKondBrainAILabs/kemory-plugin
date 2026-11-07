@@ -2298,6 +2298,7 @@ class McpEntryTest(unittest.TestCase):
 
     def test_stateless_server_gets_no_session_header(self):
         r = self.run_mcp([self.REQ, self.REQ], KEMORY_API_KEY="k")
+        self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(len(McpRecorder.requests), 2)
         for headers, _, _ in McpRecorder.requests:
             self.assertIsNone(headers.get("Mcp-Session-Id"),
