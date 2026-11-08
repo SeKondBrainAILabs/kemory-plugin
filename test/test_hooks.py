@@ -7,6 +7,7 @@ Run: python3 test/test_hooks.py
 """
 import ast
 import base64
+import copy
 import http.server
 import json
 import os
@@ -202,42 +203,85 @@ class McpRecorder(http.server.BaseHTTPRequestHandler):
         pass
 
 
+def clean_env(drop_entrypoint=False):
+    """A copy of os.environ without KEMORY_* (and CLAUDE_CODE_ENTRYPOINT on request)."""
+    return {k: v for k, v in os.environ.items()
+            if not k.startswith("KEMORY_")
+            and not (drop_entrypoint and k == "CLAUDE_CODE_ENTRYPOINT")}
+
+
+# Recorder's fields are class attributes shared by every class using it. They
+# are read from vars(), not dir(), which also lists BaseHTTPRequestHandler's own.
+RECORDER_DEFAULTS = {
+    name: copy.deepcopy(value) for name, value in vars(Recorder).items()
+    if not name.startswith("__") and not callable(value)}
+
+
 def reset_recorder():
-    """Recorder's fields are class attributes shared by every class using it."""
-    Recorder.posts.clear()
-    Recorder.get_payload = {"namespaces": []}
-    Recorder.search_payload = {"items": [], "total": 0}
-    Recorder.search_status = 200
-    Recorder.memories_status = 201
-    Recorder.get_status = 200
-    Recorder.agents_payload = None
-    Recorder.whoami_org = None
-    Recorder.token_payload = {"access_token": "fresh-token",
-                              "expires_in": 3600}
-    Recorder.token_status = 200
+    for name, default in RECORDER_DEFAULTS.items():
+        if name == "posts":
+            # Cleared in place: the handler or a test may hold the list.
+            Recorder.posts.clear()
+        else:
+            # A fresh copy each time, so an in-place edit cannot reach the default.
+            setattr(Recorder, name, copy.deepcopy(default))
 
 
-class HookTest(unittest.TestCase):
+class LocalServerTest(unittest.TestCase):
+    """Serves `handler` on a free 127.0.0.1 port and gives each test a fresh HOME."""
+
+    handler = Recorder
+
     @classmethod
     def setUpClass(cls):
-        cls.srv = http.server.HTTPServer(("127.0.0.1", 0), Recorder)
+        cls.srv = http.server.HTTPServer(("127.0.0.1", 0), cls.handler)
         cls.port = cls.srv.server_address[1]
         threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
 
     @classmethod
     def tearDownClass(cls):
         cls.srv.shutdown()
+        cls.srv.server_close()
 
     def setUp(self):
-        reset_recorder()
+        if self.handler is Recorder:
+            reset_recorder()
         self.home = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.home, ignore_errors=True)
 
+
+class RecorderResetTest(unittest.TestCase):
+    def test_reset_restores_every_field(self):
+        fields = {name for name, value in vars(Recorder).items()
+                  if not name.startswith("__") and not callable(value)}
+        self.assertEqual(fields, set(RECORDER_DEFAULTS))
+        self.addCleanup(reset_recorder)
+
+        posts = Recorder.posts
+        posts.append("leftover")
+        sentinel = object()
+        for name in fields - {"posts"}:
+            setattr(Recorder, name, sentinel)
+        reset_recorder()
+        self.assertEqual(Recorder.posts, [])
+        self.assertIs(Recorder.posts, posts)
+        for name in fields - {"posts"}:
+            self.assertEqual(getattr(Recorder, name), RECORDER_DEFAULTS[name], name)
+
+        for _ in range(2):
+            Recorder.get_payload["namespaces"].append("x")
+            Recorder.token_payload["access_token"] = "x"
+            reset_recorder()
+            self.assertEqual(Recorder.get_payload, {"namespaces": []})
+            self.assertEqual(Recorder.token_payload,
+                             {"access_token": "fresh-token", "expires_in": 3600})
+
+
+class HookTest(LocalServerTest):
     def env(self, **extra):
         # The entrypoint changes what the scripts tell the person, so a run
         # inside the desktop app must see what CI sees.
-        e = {k: v for k, v in os.environ.items()
-             if not k.startswith("KEMORY_") and k != "CLAUDE_CODE_ENTRYPOINT"}
+        e = clean_env(drop_entrypoint=True)
         e.update({"HOME": self.home,
                   "KEMORY_URL": f"http://127.0.0.1:{self.port}"})
         e.update(extra)
@@ -1650,33 +1694,12 @@ class HookTest(unittest.TestCase):
         r = self.run_script("status.sh", {}, KEMORY_API_KEY="k")
         self.assertNotIn("memory tools connect", r.stdout)
 
-class CredentialTest(unittest.TestCase):
+class CredentialTest(LocalServerTest):
     """Token refresh and the two-credential story.
 
     The hooks and the MCP tools authenticate separately. Every failure mode
     here is one where the user believes the plugin is working.
     """
-
-    @classmethod
-    def setUpClass(cls):
-        cls.srv = http.server.HTTPServer(("127.0.0.1", 0), Recorder)
-        cls.port = cls.srv.server_address[1]
-        threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
-
-    @classmethod
-    def tearDownClass(cls):
-        cls.srv.shutdown()
-
-    def setUp(self):
-        Recorder.posts.clear()
-        Recorder.get_payload = {"namespaces": []}
-        Recorder.get_status = 200
-        Recorder.agents_payload = None
-        Recorder.token_payload = {"access_token": "fresh-token",
-                                  "expires_in": 3600}
-        Recorder.token_status = 200
-        self.home = tempfile.mkdtemp()
-        self.addCleanup(shutil.rmtree, self.home, ignore_errors=True)
 
     def write_creds(self, **over):
         d = {"kemory_url": f"http://127.0.0.1:{self.port}",
@@ -1693,7 +1716,7 @@ class CredentialTest(unittest.TestCase):
 
     def resolve(self, **env):
         """Source lib.sh, resolve auth, print what the hooks would send."""
-        e = {k: v for k, v in os.environ.items() if not k.startswith("KEMORY_")}
+        e = clean_env()
         e["HOME"] = self.home
         e.update(env)
         script = (f'. "{SCRIPTS}/lib.sh"; kemory_resolve_auth'
@@ -1712,7 +1735,7 @@ class CredentialTest(unittest.TestCase):
         self.assertIn("expired=0", out)
 
     def org_header(self, **env):
-        e = {k: v for k, v in os.environ.items() if not k.startswith("KEMORY_")}
+        e = clean_env()
         e["HOME"] = self.home
         e.update(env)
         script = (f'. "{SCRIPTS}/lib.sh"; kemory_resolve_auth'
@@ -1764,7 +1787,7 @@ class CredentialTest(unittest.TestCase):
 
     def test_prompt_recall_sends_the_selected_organisation(self):
         self.write_creds(expires_at=time.time() + 3600, active_org_id="org-b")
-        e = {k: v for k, v in os.environ.items() if not k.startswith("KEMORY_")}
+        e = clean_env()
         e["HOME"] = self.home
         run_with_timeout([str(SCRIPTS / "prompt-recall.sh")], text=True,
                        capture_output=True, env=e, timeout=30,
@@ -1803,7 +1826,7 @@ class CredentialTest(unittest.TestCase):
 
     # --- concurrent writers and the file they could damage -------
     def session_start(self):
-        e = {k: v for k, v in os.environ.items() if not k.startswith("KEMORY_")}
+        e = clean_env()
         e.update({"HOME": self.home, "CLAUDE_PROJECT_DIR": self.home})
         r = run_with_timeout([str(SCRIPTS / "session-start.sh")], input="{}",
                            text=True, capture_output=True, env=e)
@@ -1825,7 +1848,7 @@ class CredentialTest(unittest.TestCase):
 
     def test_concurrent_refreshes_leave_valid_json(self):
         creds = self.write_creds()
-        e = {k: v for k, v in os.environ.items() if not k.startswith("KEMORY_")}
+        e = clean_env()
         e["HOME"] = self.home
         procs = [subprocess.Popen(
             ["bash", "-c", f'. "{SCRIPTS}/lib.sh"; kemory_resolve_auth'],
@@ -1853,7 +1876,7 @@ class CredentialTest(unittest.TestCase):
     def test_unreadable_file_is_reported_as_corrupt_not_absent(self):
         creds = self.write_creds()
         creds.write_text('"access_token": "x"}')
-        e = {k: v for k, v in os.environ.items() if not k.startswith("KEMORY_")}
+        e = clean_env()
         e["HOME"] = self.home
         r = run_with_timeout(
             ["bash", "-c", f'. "{SCRIPTS}/lib.sh"; kemory_resolve_auth;'
@@ -1900,7 +1923,7 @@ class CredentialTest(unittest.TestCase):
             "headers": {"X-API-Key": "kemory_secret"}}}})
         r = self.resolve(CLAUDE_PROJECT_DIR=self.home)
         script = (f'. "{SCRIPTS}/lib.sh"; kemory_find_mcp_config_key')
-        e = {k: v for k, v in os.environ.items() if not k.startswith("KEMORY_")}
+        e = clean_env()
         e.update({"HOME": self.home, "CLAUDE_PROJECT_DIR": self.home})
         found = run_with_timeout(["bash", "-c", script], text=True,
                                capture_output=True, env=e).stdout
@@ -1914,7 +1937,7 @@ class CredentialTest(unittest.TestCase):
             "url": "https://example.invalid",
             "headers": {"X-API-Key": "not-ours"}}}})
         script = f'. "{SCRIPTS}/lib.sh"; kemory_find_mcp_config_key'
-        e = {k: v for k, v in os.environ.items() if not k.startswith("KEMORY_")}
+        e = clean_env()
         e.update({"HOME": self.home, "CLAUDE_PROJECT_DIR": self.home})
         r = run_with_timeout(["bash", "-c", script], text=True,
                            capture_output=True, env=e)
@@ -1923,7 +1946,7 @@ class CredentialTest(unittest.TestCase):
     def test_setup_notice_never_claims_nothing_is_configured(self):
         # The old wording sent connector users, whose tools were working, off
         # to brew install. Whatever it says, it must not say that.
-        e = {k: v for k, v in os.environ.items() if not k.startswith("KEMORY_")}
+        e = clean_env()
         e.update({"HOME": self.home, "CLAUDE_PROJECT_DIR": self.home})
         r = run_with_timeout([str(SCRIPTS / "session-start.sh")], input="{}",
                            text=True, capture_output=True, env=e)
@@ -1937,7 +1960,7 @@ class CredentialTest(unittest.TestCase):
         # was to lead with KEMORY_API_KEY, a long-lived secret in a shell
         # profile. Neither is needed now: /kemory:login ships with the plugin,
         # so the machine without a CLI gets the SAME best answer as one with it.
-        e = {k: v for k, v in os.environ.items() if not k.startswith("KEMORY_")}
+        e = clean_env()
         e.update({"HOME": self.home, "CLAUDE_PROJECT_DIR": self.home,
                   # A PATH with no kemory on it.
                   "PATH": "/usr/bin:/bin:/usr/sbin:/sbin"})
@@ -1953,7 +1976,7 @@ class CredentialTest(unittest.TestCase):
     def test_setup_notice_names_the_mcp_config_without_leaking_the_key(self):
         self.mcp_config({"mcpServers": {"kemory": {
             "headers": {"X-API-Key": "kemory_secret"}}}})
-        e = {k: v for k, v in os.environ.items() if not k.startswith("KEMORY_")}
+        e = clean_env()
         e.update({"HOME": self.home, "CLAUDE_PROJECT_DIR": self.home})
         r = run_with_timeout([str(SCRIPTS / "session-start.sh")], input="{}",
                            text=True, capture_output=True, env=e)
@@ -1962,7 +1985,7 @@ class CredentialTest(unittest.TestCase):
         self.assertNotIn("kemory_secret", msg)
 
 
-class McpEntryTest(unittest.TestCase):
+class McpEntryTest(LocalServerTest):
     """The bundled MCP server: who serves, and what happens with no credential.
 
     The entry has been rewritten three times because a static entry can only
@@ -1972,23 +1995,14 @@ class McpEntryTest(unittest.TestCase):
     serves through whichever bridge matches the credential it found.
     """
 
-    @classmethod
-    def setUpClass(cls):
-        cls.srv = http.server.HTTPServer(("127.0.0.1", 0), McpRecorder)
-        cls.port = cls.srv.server_address[1]
-        threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
-
-    @classmethod
-    def tearDownClass(cls):
-        cls.srv.shutdown()
+    handler = McpRecorder
 
     def setUp(self):
+        super().setUp()
         McpRecorder.requests.clear()
         McpRecorder.issue_session = None
         McpRecorder.require_auth = False
         McpRecorder.replies = []
-        self.home = tempfile.mkdtemp()
-        self.addCleanup(shutil.rmtree, self.home, ignore_errors=True)
         # A stub `kemory` on PATH would be launched with exec, so the CLI branch
         # is selected by putting one here and asserting on what it prints.
         self.bindir = tempfile.mkdtemp()
@@ -2000,7 +2014,7 @@ class McpEntryTest(unittest.TestCase):
         p.chmod(0o755)
 
     def env(self, with_cli=False, **extra):
-        e = {k: v for k, v in os.environ.items() if not k.startswith("KEMORY_")}
+        e = clean_env()
         path = os.environ.get("PATH", "/usr/bin:/bin")
         if with_cli:
             path = f"{self.bindir}:{path}"
@@ -2383,8 +2397,7 @@ class StaleVersionNoticeTest(unittest.TestCase):
             {"plugins": [{"name": name, "version": version}]}))
 
     def run_session_start(self, **extra):
-        e = {k: v for k, v in os.environ.items()
-             if not k.startswith("KEMORY_") and k != "CLAUDE_CODE_ENTRYPOINT"}
+        e = clean_env(drop_entrypoint=True)
         e.update({"HOME": self.home, "KEMORY_URL": "http://127.0.0.1:1"})
         e.update(extra)
         return run_with_timeout([str(SCRIPTS / "session-start.sh")], input="{}",
@@ -2494,7 +2507,7 @@ class McpConfigCountTest(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.home, ignore_errors=True)
 
     def count(self):
-        e = {k: v for k, v in os.environ.items() if not k.startswith("KEMORY_")}
+        e = clean_env()
         e["HOME"] = self.home
         e["CLAUDE_PROJECT_DIR"] = self.home
         r = run_with_timeout(
@@ -2611,24 +2624,17 @@ def _jwt(claims: dict) -> str:
     return f"{seg({'alg': 'none'})}.{seg(claims)}.sig"
 
 
-class DeviceLoginTest(unittest.TestCase):
+class DeviceLoginTest(LocalServerTest):
     """`/kemory:login` — the plugin obtaining a credential on its own.
 
     Until this existed the plugin could only READ a credential, so a user with
     no CLI and no API key had no route to the one path that carries the hooks.
     """
 
-    @classmethod
-    def setUpClass(cls):
-        cls.srv = http.server.HTTPServer(("127.0.0.1", 0), IdpRecorder)
-        cls.port = cls.srv.server_address[1]
-        threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
-
-    @classmethod
-    def tearDownClass(cls):
-        cls.srv.shutdown()
+    handler = IdpRecorder
 
     def setUp(self):
+        super().setUp()
         self.base = f"http://127.0.0.1:{self.port}"
         IdpRecorder.requests.clear()
         IdpRecorder.token_times.clear()
@@ -2645,8 +2651,6 @@ class DeviceLoginTest(unittest.TestCase):
             "interval": 1,
         }
         IdpRecorder.token_script = [(200, self.tokens())]
-        self.home = tempfile.mkdtemp()
-        self.addCleanup(shutil.rmtree, self.home, ignore_errors=True)
 
     def tokens(self, **claims):
         c = {"email": "person@example.com", "org_id": "org-default"}
@@ -2658,7 +2662,7 @@ class DeviceLoginTest(unittest.TestCase):
         }
 
     def run_login(self, **env):
-        e = {k: v for k, v in os.environ.items() if not k.startswith("KEMORY_")}
+        e = clean_env()
         e.update({"HOME": self.home, "KEMORY_URL": self.base})
         e.update(env)
         return run_with_timeout([str(SCRIPTS / "login.sh")], text=True,
@@ -2861,7 +2865,7 @@ class DeviceLoginTest(unittest.TestCase):
 
     def test_ctrl_c_cancels_cleanly(self):
         IdpRecorder.token_script = [(400, {"error": "authorization_pending"})]
-        e = {k: v for k, v in os.environ.items() if not k.startswith("KEMORY_")}
+        e = clean_env()
         e.update({"HOME": self.home, "KEMORY_URL": self.base})
         # A runner that ignores SIGINT would pass that on to the child.
         proc = subprocess.Popen(
@@ -2935,7 +2939,7 @@ class DeviceLoginTest(unittest.TestCase):
         this feature exists to remove.
         """
         self.run_login()
-        e = {k: v for k, v in os.environ.items() if not k.startswith("KEMORY_")}
+        e = clean_env()
         e["HOME"] = self.home
         script = (f'. "{SCRIPTS}/lib.sh"; kemory_resolve_auth || exit 1; '
                   'echo "$KEMORY_AUTH_HEADER"; echo "url=$KEMORY_BASE_URL"')
@@ -2953,14 +2957,14 @@ class DeviceLoginTest(unittest.TestCase):
         # feature is for.
         before = run_with_timeout(
             [str(SCRIPTS / "mcp.sh")], input="", text=True, capture_output=True,
-            env={**{k: v for k, v in os.environ.items() if not k.startswith("KEMORY_")},
+            env={**clean_env(),
                  "HOME": self.home, "KEMORY_URL": self.base})
         self.assertEqual(before.returncode, 1, "no credential yet")
         self.assertIn("no credential", before.stderr)
         self.run_login()
         after = run_with_timeout(
             [str(SCRIPTS / "mcp.sh")], input="", text=True, capture_output=True,
-            env={**{k: v for k, v in os.environ.items() if not k.startswith("KEMORY_")},
+            env={**clean_env(),
                  "HOME": self.home, "KEMORY_URL": self.base,
                  "PATH": ":".join(d for d in os.environ.get("PATH", "").split(":")
                                   if not (pathlib.Path(d) / "kemory").exists())})
@@ -2972,7 +2976,7 @@ class DeviceLoginTest(unittest.TestCase):
         self.assertNotIn("login", json.dumps(hooks))
 
 
-class DuplicateServerTest(unittest.TestCase):
+class DuplicateServerTest(LocalServerTest):
     """Standing down when this machine already serves the same Kemory.
 
     The asymmetry that matters: failing to stand down costs duplicated tools,
@@ -2981,24 +2985,12 @@ class DuplicateServerTest(unittest.TestCase):
     only looks similar.
     """
 
-    @classmethod
-    def setUpClass(cls):
-        cls.srv = http.server.HTTPServer(("127.0.0.1", 0), Recorder)
-        cls.port = cls.srv.server_address[1]
-        threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
-
-    @classmethod
-    def tearDownClass(cls):
-        cls.srv.shutdown()
-
     def setUp(self):
-        reset_recorder()
-        self.home = tempfile.mkdtemp()
-        self.addCleanup(shutil.rmtree, self.home, ignore_errors=True)
+        super().setUp()
         self.mine = f"http://127.0.0.1:{self.port}"
 
     def env(self, **extra):
-        e = {k: v for k, v in os.environ.items() if not k.startswith("KEMORY_")}
+        e = clean_env()
         # No real kemory CLI on PATH, so the launcher takes the bridge branch
         # and the test does not depend on what this machine has installed.
         path = ":".join(d for d in os.environ.get("PATH", "").split(":")
@@ -3240,7 +3232,7 @@ class FixtureCoverage(unittest.TestCase):
                          "UNCAPTURED excuses an event that already has a fixture")
 
 
-class MuseTranscriptTest(unittest.TestCase):
+class MuseTranscriptTest(LocalServerTest):
     """capture.sh and store-nudge.sh read Muse Code's session.jsonl.
 
     The record shape is a public measurement, not a contract: supermemoryai/
@@ -3254,20 +3246,8 @@ class MuseTranscriptTest(unittest.TestCase):
 
     LOG = ROOT / "test" / "fixtures" / "muse" / "session.jsonl"
 
-    @classmethod
-    def setUpClass(cls):
-        cls.srv = http.server.HTTPServer(("127.0.0.1", 0), Recorder)
-        cls.port = cls.srv.server_address[1]
-        threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
-
-    @classmethod
-    def tearDownClass(cls):
-        cls.srv.shutdown()
-
     def setUp(self):
-        reset_recorder()
-        self.home = tempfile.mkdtemp()
-        self.addCleanup(shutil.rmtree, self.home, ignore_errors=True)
+        super().setUp()
         d = pathlib.Path(self.home) / ".kemory"
         d.mkdir()
         (d / "credentials-prod").write_text(json.dumps({
@@ -3440,7 +3420,7 @@ class MuseTranscriptTest(unittest.TestCase):
         self.assertEqual((r.returncode, r.stdout), (0, ""))
 
 
-class SkippedServerTest(unittest.TestCase):
+class SkippedServerTest(LocalServerTest):
     """Reporting that the HOST has switched our MCP server off.
 
     Claude Code caches a connect failure in ~/.claude/mcp-needs-auth-cache.json
@@ -3457,26 +3437,14 @@ class SkippedServerTest(unittest.TestCase):
     test that asserts we speak up has a twin asserting we stay quiet.
     """
 
-    @classmethod
-    def setUpClass(cls):
-        cls.srv = http.server.HTTPServer(("127.0.0.1", 0), Recorder)
-        cls.port = cls.srv.server_address[1]
-        threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
-
-    @classmethod
-    def tearDownClass(cls):
-        cls.srv.shutdown()
-
     def setUp(self):
-        reset_recorder()
-        self.home = tempfile.mkdtemp()
-        self.addCleanup(shutil.rmtree, self.home, ignore_errors=True)
+        super().setUp()
         self.mine = f"http://127.0.0.1:{self.port}"
         self.cache = pathlib.Path(self.home) / ".claude" / "mcp-needs-auth-cache.json"
         self.cache.parent.mkdir(parents=True, exist_ok=True)
 
     def env(self, **extra):
-        e = {k: v for k, v in os.environ.items() if not k.startswith("KEMORY_")}
+        e = clean_env()
         e.update({"HOME": self.home, "CLAUDE_PROJECT_DIR": self.home,
                   "KEMORY_URL": self.mine, "KEMORY_API_KEY": "k",
                   # Nothing here should need the network; keep a stray call short.
@@ -3680,7 +3648,7 @@ class SkippedServerTest(unittest.TestCase):
                          "the cache file was rewritten")
 
 
-class GrokDisabledServerTest(unittest.TestCase):
+class GrokDisabledServerTest(LocalServerTest):
     """Reporting that Grok Build has our MCP server switched off.
 
     Grok keeps a top-level disabled_mcp_servers list in ~/.grok/config.toml and
@@ -3691,20 +3659,8 @@ class GrokDisabledServerTest(unittest.TestCase):
     every test that asserts we speak up has a twin asserting we stay quiet.
     """
 
-    @classmethod
-    def setUpClass(cls):
-        cls.srv = http.server.HTTPServer(("127.0.0.1", 0), Recorder)
-        cls.port = cls.srv.server_address[1]
-        threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
-
-    @classmethod
-    def tearDownClass(cls):
-        cls.srv.shutdown()
-
     def setUp(self):
-        reset_recorder()
-        self.home = tempfile.mkdtemp()
-        self.addCleanup(shutil.rmtree, self.home, ignore_errors=True)
+        super().setUp()
         self.mine = f"http://127.0.0.1:{self.port}"
         self.config = pathlib.Path(self.home) / ".grok" / "config.toml"
         self.config.parent.mkdir(parents=True, exist_ok=True)
@@ -3714,7 +3670,7 @@ class GrokDisabledServerTest(unittest.TestCase):
                              / "kemory-plugin-git" / "plugin")
 
     def env(self, plugin_root=None, **extra):
-        e = {k: v for k, v in os.environ.items() if not k.startswith("KEMORY_")}
+        e = clean_env()
         e.update({"HOME": self.home, "CLAUDE_PROJECT_DIR": self.home,
                   "KEMORY_URL": self.mine, "KEMORY_API_KEY": "k",
                   "KEMORY_CONTEXT_TIMEOUT": "2",
@@ -3868,7 +3824,7 @@ class ConnectorStatusTest(unittest.TestCase):
         self.config = pathlib.Path(self.home) / ".claude.json"
 
     def env(self, **extra):
-        e = {k: v for k, v in os.environ.items() if not k.startswith("KEMORY_")}
+        e = clean_env()
         path = ":".join(d for d in os.environ.get("PATH", "").split(":")
                         if not (pathlib.Path(d) / "kemory").exists())
         e.update({"HOME": self.home, "CLAUDE_PROJECT_DIR": self.home,
@@ -4173,7 +4129,7 @@ MUSE_FIXTURES = ROOT / "test" / "fixtures" / "muse"
 MUSE_EVENTS = {"SessionStart", "UserPromptSubmit", "PostToolUse", "Stop", "PreCompact", "SessionEnd"}
 
 
-class MusePluginTest(unittest.TestCase):
+class MusePluginTest(LocalServerTest):
     """plugin/.muse-plugin: the Muse Code manifest, and the scripts run the way Muse runs them.
 
     No Muse documentation was available, so every Muse fact here is a public
@@ -4193,20 +4149,8 @@ class MusePluginTest(unittest.TestCase):
     Muse hooks have no matcher field, so every PostToolUse reaches the script.
     """
 
-    @classmethod
-    def setUpClass(cls):
-        cls.srv = http.server.HTTPServer(("127.0.0.1", 0), Recorder)
-        cls.port = cls.srv.server_address[1]
-        threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
-
-    @classmethod
-    def tearDownClass(cls):
-        cls.srv.shutdown()
-
     def setUp(self):
-        reset_recorder()
-        self.home = tempfile.mkdtemp()
-        self.addCleanup(shutil.rmtree, self.home, ignore_errors=True)
+        super().setUp()
         self.manifest = json.loads((MUSE / "plugin.json").read_text())
         self.mine = f"http://127.0.0.1:{self.port}"
         d = pathlib.Path(self.home) / ".kemory"
