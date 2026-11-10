@@ -753,12 +753,18 @@ class HookTest(LocalServerTest):
         "password: hunter2supersecret",
         "AKIAIOSFODNN7EXAMPLE",
         "xoxb-1234567890-abcdefghij",
+        # Plain keys, one after a space and one glued to a word: both must stay
+        # redacted whatever is done to the dashed-key pattern.
+        "my key is " + "sk-" + "abcdefghij1234567890",
+        "url ?q=key%3D" + "sk-" + "abcdefghij1234567890",
     ]
     PROSE = [
         "the token expired yesterday, please regenerate",
         "our secret sauce is caching",
         "add a password field to the signup form",
         "why does the api_key check fail on staging",
+        "multi-task-learning-pipeline-tuning",
+        "check the disk-space-monitoring-dashboard",
     ]
 
     def _captured(self, line):
@@ -783,6 +789,50 @@ class HookTest(LocalServerTest):
         for s in self.PROSE:
             with self.subTest(prose=s):
                 self.assertNotIn("[REDACTED]", self._captured(s))
+
+    # Anthropic and OpenAI project keys have dashes after "sk-". Built by
+    # concatenation so no complete key-shaped literal sits in the repo.
+    PREFIXED_SK_KEYS = [
+        "sk-ant-" + "api03-" + "Ab1" * 30 + "-xyzAA",
+        "sk-proj-" + "Q7x" * 20,
+        "sk-" + "svcacct-" + "Zz9_" * 10,
+        "sk-" + "A1b2" * 5 + "-tail_" + "B" * 8,
+    ]
+
+    def test_capture_redacts_prefixed_sk_keys(self):
+        for key in self.PREFIXED_SK_KEYS:
+            with self.subTest(key=key[:8]):
+                content = self._captured(f"my key is {key} and the call 401s")
+                self.assertNotIn(key[-12:], content)
+                self.assertIn("[REDACTED]", content)
+
+    def test_prompt_recall_redacts_prefixed_sk_keys(self):
+        for key in self.PREFIXED_SK_KEYS:
+            with self.subTest(key=key[:8]):
+                Recorder.posts.clear()
+                self.recall(prompt=f"deploy fails with {key}, what did we decide")
+                self.assertNotIn(key[-12:], self.searches()[0]["query"])
+
+    # A dashed sk- name followed by a secret the keyword, JWT or PEM patterns
+    # catch: the name must not hide that secret. Built by concatenation.
+    SK_NAME_THEN_SECRET = [
+        ("sk-prod-db-" + "password: " + "hunter2hunter2", "hunter2hunter2"),
+        ("export SK-STAGING-" + "API_TOKEN=" + "abcdef123456", "abcdef123456"),
+        ("sk-" + "a" * 16 + "-token=" + "supersecretvalue", "supersecretvalue"),
+        ("sk-" + "build-cache-key-" + "eyJ" + "h" * 12 + "." + "p" * 12 + "."
+         + "SIG" * 4, "SIG" * 4),
+        ("sk-" + "deploy-host-ssh-key" + "-----BEGIN RSA " + "PRIVATE KEY-----",
+         "PRIVATE KEY-----"),
+        ("sk-proj-" + "Q7x" * 5 + "sk-" + "A" * 16 + "_" + "TAIL" * 3,
+         "TAIL" * 3),
+    ]
+
+    def test_dashed_sk_name_does_not_hide_the_secret_after_it(self):
+        for text, fragment in self.SK_NAME_THEN_SECRET:
+            with self.subTest(text=text[:16]):
+                content = self._captured(text)
+                self.assertNotIn(fragment, content)
+                self.assertIn("[REDACTED]", content)
 
     # Fake key material only: the repo is public.
     KEY_BODY = ["MIIEpAIBAAKCAQEA" + "q" * 60, "zzzz" * 16 + "wxyz"]

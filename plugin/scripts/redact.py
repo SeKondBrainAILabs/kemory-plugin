@@ -42,9 +42,39 @@ KEY = re.compile(
     r'|(?:Proc-Type|DEK-Info|Version|Comment|Hash|Charset):[^\n]*))*)'
 )
 
+# Anthropic and OpenAI project and service keys have dashes and underscores
+# after sk-, where SECRET's sk- branch stops. This is its own pattern and
+# redact() takes the union of both patterns' matches: as a branch inside
+# SECRET it won the leftmost match and swallowed a following password=/token=,
+# JWT or PEM header, leaking the value. The \b keeps words like task-... and
+# disk-... from matching.
+SK_DASHED = re.compile(r'(?i)\bsk-[A-Za-z0-9_-]{16,}')
+
 PLACEHOLDER = "[REDACTED]"
 
 
 def redact(text: str) -> str:
     """Replace credential-shaped substrings with a placeholder."""
-    return SECRET.sub(PLACEHOLDER, KEY.sub(PLACEHOLDER, text))
+    # Private-key blocks go first, as their own pass (see KEY). Then the union of
+    # SECRET's and SK_DASHED's matches: with no SK_DASHED match this equals
+    # SECRET.sub(PLACEHOLDER, KEY.sub(PLACEHOLDER, text)).
+    text = KEY.sub(PLACEHOLDER, text)
+    spans = sorted(
+        m.span()
+        for pattern in (SECRET, SK_DASHED)
+        for m in pattern.finditer(text)
+    )
+    merged = []
+    for start, end in spans:
+        if merged and start < merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], end)
+        else:
+            merged.append([start, end])
+    out = []
+    pos = 0
+    for start, end in merged:
+        out.append(text[pos:start])
+        out.append(PLACEHOLDER)
+        pos = end
+    out.append(text[pos:])
+    return "".join(out)
