@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "name": "kemory",
   "displayName": "Kemory",
-  "version": "0.16.0",
+  "version": "0.17.0",
   "description": "Persistent cross-session memory via Kemory: hooks that keep recall quality improving, a skill for using memory well, and session capture, on by default.",
   "compat": {
     "source": "native",

@@ -3,6 +3,17 @@
 All notable changes to this project are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.17.0] — 2026-11-10
+
+### Added
+- **A Kemory plugin for Cursor, in `plugins/cursor`.** It brings the hosted Kemory MCP server, the `kemory` skill, and hooks that load context at session start and capture the session through the Kemory CLI. The hooks do nothing when the CLI is not installed. Do not combine it with `kemory connect --host cursor`, or Cursor gets every tool twice.
+- **Session capture works under Muse Code.** Muse sends no transcript path, so capture now finds its session log by session id and reads the user turns from it. Claude Code and Grok Build transcripts are read as before. The store reminder can read Muse logs too, but it stays off by default and Muse's cleared environment gives no way to turn it on yet.
+- **Muse Code can install the plugin.** `.muse-plugin/plugin.json` brings the `kemory` skill, `/kemory:login` and `/kemory:status`, the hooks and the memory server. The manifest carries the same version as the Claude Code and Grok Build ones. Under Muse the rate reminder fires only after a Kemory recall tool, and the memory server no longer stands down for an entry in Claude Code's config, which Muse does not read.
+
+### Fixed
+- **Credential resolution and the hook helpers no longer import Python modules from the current directory.** They ran their Python as inline code, which puts the working directory first on the import path, so a `json.py` in a project root ran inside the program that holds the refresh token. They now run from files in the plugin's own directory.
+- **Session capture and the store reminder skip a transcript line of unexpected shape.** A line that is valid JSON but not a message object (such as `null`, a number or a list) used to stop both for the whole session; now only that line is ignored.
+
 ## [0.16.0] — 2026-10-13
 
 ### Added
