@@ -224,33 +224,7 @@ if [ "${api_code:-}" = "200" ] && [ "${KEMORY_AUTH_HEADER#Authorization:}" != "$
    && command -v python3 >/dev/null 2>&1; then
   agents="$(curl -s --max-time 6 -H "$KEMORY_AUTH_HEADER" ${KEMORY_ORG_HEADER:+-H "$KEMORY_ORG_HEADER"} \
             "$KEMORY_BASE_URL/api/v1/agents?status=active&scope=mine" 2>/dev/null)"
-  seen="$(printf '%s' "$agents" | python3 -c '
-import json, sys
-from datetime import datetime, timezone
-try:
-    rows = json.load(sys.stdin)
-except Exception:
-    print("unknown"); raise SystemExit
-if not isinstance(rows, list):
-    print("unknown"); raise SystemExit
-last = None
-for a in rows:
-    if not isinstance(a, dict):
-        continue
-    if a.get("client_slug") != "claude-code" and a.get("agent_name") != "claude-code-agent":
-        continue
-    try:
-        t = datetime.fromisoformat(str(a.get("last_active_at") or "").replace("Z", "+00:00"))
-    except ValueError:
-        continue
-    if t.tzinfo is None:
-        t = t.replace(tzinfo=timezone.utc)
-    last = t if last is None or t > last else last
-if last is None:
-    print("never")
-else:
-    print(int((datetime.now(timezone.utc) - last).total_seconds() // 86400))
-' 2>/dev/null)"
+  seen="$(printf '%s' "$agents" | python3 "$DIR/status.py" agent-last-seen 2>/dev/null)"
   case "$seen" in
     never)
       bad "the Kemory server has never seen the memory tools connect from this host"
@@ -313,7 +287,7 @@ info "the host's own MCP server list shows which kemory server it is using"
 # --- plugin version --------------------------------------------------------
 manifest="$DIR/../.claude-plugin/plugin.json"
 if [ -r "$manifest" ] && command -v python3 >/dev/null 2>&1; then
-  installed=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("version",""))' "$manifest" 2>/dev/null)
+  installed=$(python3 "$DIR/status.py" manifest-version "$manifest" 2>/dev/null)
   [ -n "$installed" ] && info "plugin version $installed — $(kemory_update_command) to move it"
 fi
 
