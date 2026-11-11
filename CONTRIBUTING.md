@@ -28,10 +28,19 @@ Thanks for helping improve the Kemory plugin. By taking part you agree to the
 
 ```bash
 ./scripts/check.sh
+./scripts/py_check.sh
 ```
 
-This validates every JSON manifest and shell script, and lints the Python with
-ruff (F and B rules). CI runs the same script.
+`check.sh` validates every JSON manifest and shell script, and lints the Python with
+ruff (B, E4, E7, E9 and F rules). CI runs the same script.
+
+`py_check.sh` lints `plugin/scripts`, `scripts` and `test` with ruff, then runs the
+hook tests under coverage.py and prints coverage per file and for the credential
+code (`kemory_creds.py`). It has no coverage threshold. It keeps ruff and coverage in
+a venv under `${XDG_CACHE_HOME:-$HOME/.cache}/kemory-plugin-check`, outside the
+repo, and needs PyPI the first time. Python lives in `.py` files next to the hook
+scripts, never in `python3 -c` or a heredoc, which would import from the current
+directory.
 
 Describe a change for users in a changelog fragment, `changes/<topic>.md`,
 not in `CHANGELOG.md`. [changes/README.md](changes/README.md) has the format

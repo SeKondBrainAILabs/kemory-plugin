@@ -14,13 +14,14 @@ import sys
 
 
 def active_org():
-    import json, sys
+    import json
+    import sys
     raw = sys.stdin.read().strip()
     try:
         data = json.loads(raw)
     except ValueError:
         # An SSE reply: the last data line carries the result.
-        lines = [l[5:].strip() for l in raw.splitlines() if l.startswith("data:")]
+        lines = [ln[5:].strip() for ln in raw.splitlines() if ln.startswith("data:")]
         try:
             data = json.loads(lines[-1])
         except Exception:
@@ -32,7 +33,9 @@ def active_org():
 
 
 def find_mcp_config_key():
-    import json, os, sys  # noqa: F401
+    import json
+    import os
+    import sys  # noqa: F401
 
     candidates = [
         os.path.join(os.environ.get("CLAUDE_PROJECT_DIR", os.getcwd()), ".mcp.json"),
@@ -80,7 +83,8 @@ def find_mcp_config_key():
 
 
 def count_mcp_entries():
-    import json, os
+    import json
+    import os
 
     candidates = [
         os.path.join(os.environ.get("CLAUDE_PROJECT_DIR", os.getcwd()), ".mcp.json"),
@@ -118,7 +122,8 @@ def count_mcp_entries():
 
 
 def connector_ever_connected():
-    import json, os
+    import json
+    import os
 
     try:
         with open(os.path.expanduser("~/.claude.json")) as fh:
@@ -139,7 +144,10 @@ def connector_ever_connected():
 
 
 def find_duplicate_server():
-    import json, os, shutil, urllib.parse
+    import json
+    import os
+    import shutil
+    import urllib.parse
 
     MINE = urllib.parse.urlparse(os.environ["KEMORY_MINE"]).netloc.lower()
     if not MINE:
@@ -238,7 +246,8 @@ def find_duplicate_server():
 
 
 def mcp_skipped_at():
-    import json, os
+    import json
+    import os
 
     path = os.path.expanduser("~/.claude/mcp-needs-auth-cache.json")
     try:
@@ -270,7 +279,8 @@ def mcp_skipped_at():
 
 
 def grok_disabled_server():
-    import os, re
+    import os
+    import re
 
     path = os.path.expanduser("~/.grok/config.toml")
     try:
@@ -311,7 +321,8 @@ def grok_disabled_server():
 
 
 def mcp_log_dir():
-    import glob, os
+    import glob
+    import os
 
     key = os.environ.get("KEMORY_LOG_KEY", "")
     if not key:

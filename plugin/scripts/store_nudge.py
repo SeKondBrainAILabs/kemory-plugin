@@ -1,4 +1,8 @@
-import hashlib, json, os, re, sys
+import hashlib
+import json
+import os
+import re
+import sys
 
 sys.path.insert(0, os.environ["KEMORY_SCRIPT_DIR"])
 from muse_log import muse_session_log  # noqa: E402

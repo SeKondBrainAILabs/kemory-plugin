@@ -15,21 +15,29 @@ Layers, from the host inward:
    `plugin/commands/*.md`, `plugin/skills/*`. The host reads these and runs the scripts.
 2. **Hook scripts**: `session-start.sh`, `prompt-recall.sh`, `rate-reminder.sh`,
    `capture.sh`, `store-nudge.sh` in `plugin/scripts/`. `capture.sh` serves Stop, PreCompact and SessionEnd.
+   Each is a thin wrapper that runs its Python from a sibling file: `session_start.py`,
+   `prompt_recall.py`, `rate_reminder.py`, `capture.py`, `store_nudge.py`. No shell
+   script embeds a Python program, so ruff and coverage see all of it.
 3. **Shared code**: `plugin/scripts/lib.sh` (bash, sourced; credential resolution via
-   `kemory_resolve_auth`) and `plugin/scripts/redact.py` (imported by `capture.sh` and
-   `prompt-recall.sh`) and `plugin/scripts/muse_log.py` (imported by `capture.sh` and
-   `store-nudge.sh`). Each is one copy on purpose, so both paths redact alike and share
+   `kemory_resolve_auth`, which runs `kemory_creds.py`; its other helpers run
+   `kemory_lib.py`) and `plugin/scripts/redact.py` (imported by `capture.py` and
+   `prompt_recall.py`) and `plugin/scripts/muse_log.py` (imported by `capture.py` and
+   `store_nudge.py`). Each is one copy on purpose, so both paths redact alike and share
    one session-id guard.
 4. **Entry scripts**: `mcp.sh` runs `kemory mcp serve` or `mcp_bridge.py`
-   (the `exec` lines in `mcp.sh`); `login.sh` runs `login.py`; `status.sh` is behind `/kemory:status`.
-5. **Dev tooling (not shipped)**: `scripts/check.sh`, `scripts/check_mcp_entry.py`,
-   `scripts/release.py`.
+   (the `exec` lines in `mcp.sh`); `login.sh` runs `login.py`; `status.sh` is behind
+   `/kemory:status` and runs `status.py`.
+5. **Dev tooling (not shipped)**: `scripts/check.sh`, `scripts/py_check.sh`,
+   `scripts/check_mcp_entry.py`, `scripts/release.py`.
 6. **Tests**: `test/test_hooks.py` and `test/fixtures/`.
 
 Dependency rules:
 
-- A plugin script may depend only on `lib.sh`, `redact.py`, `muse_log.py` and its own sibling entry
-  file (`login.py`, `mcp_bridge.py`).
+- A plugin script may depend only on `lib.sh`, `kemory_creds.py`, `kemory_lib.py`,
+  `redact.py`, `muse_log.py` and its own sibling program file (`capture.py`,
+  `prompt_recall.py`, `rate_reminder.py`, `session_start.py`, `status.py`,
+  `store_nudge.py`, `login.py`, `mcp_bridge.py`). `lib.sh` runs `kemory_creds.py` and
+  `kemory_lib.py`.
 - Nothing under `plugin/` depends on `scripts/` or `test/`.
 - Nothing imports from `test/`. Tests run the shipped scripts as subprocesses and do not
   import them.
@@ -65,9 +73,15 @@ Hooks:
 - Detect Grok with `kemory_is_grok` (`lib.sh`), never `CLAUDE_PLUGIN_ROOT` alone.
   Grok substitutes `${CLAUDE_PLUGIN_ROOT}` into command text but does not export
   it to the shell, so the variable is unset inside `/kemory:status`.
-- A `python3 <<'PY'` heredoc becomes the program's stdin. Read the hook payload into a
-  variable first and pass it in an environment variable, as `store-nudge.sh:22-23` does
-  with `HOOK_INPUT`. Never read `sys.stdin` inside the heredoc.
+- Never use `python3 -c`, `python3 -` or a `python3 <<` heredoc: all three put the
+  current directory first on `sys.path`, so a `json.py` in a user's project would run
+  inside the hook that holds the refresh token. Put the program in a `.py` file next
+  to the script and run `python3 "$DIR/x.py"`, which puts `plugin/scripts` there
+  instead. A test fails on any embedded program. A new module's name must not be a
+  standard-library name (`plugin/scripts` is first on `sys.path` for all of them) and
+  must not contain a hyphen.
+- Hook programs read the payload from `HOOK_INPUT`, not `sys.stdin`: the script has
+  already consumed stdin, as `store-nudge.sh:24-25` does.
 
 Repo hygiene:
 
@@ -81,16 +95,28 @@ Repo hygiene:
 ./scripts/check.sh
 python3 test/test_hooks.py
 shellcheck plugin/scripts/*.sh scripts/*.sh
+./scripts/py_check.sh
 ```
 
-CI (`.github/workflows/check.yml`) runs these three. `check.sh` runs the test suite
+CI (`.github/workflows/check.yml`) runs the first three; `py_check.sh` is run by hand
+until a CI step is added for it. `check.sh` runs the test suite
 itself, so it takes a few minutes. Its "official manifest validation" step runs only
 when a `claude` CLI is on PATH, so CI skips it. In an agent sandbox the `claude` on
 PATH is a wrapper that rejects `claude plugin validate` (`unknown option '--model'`),
 so that step shows FAIL for both manifests even on a clean `main`. Compare against
 `main` before treating it as a regression.
 
-The "python lint (ruff)" step runs `ruff check .` (F and B rules, `ruff.toml`). It uses
+`./scripts/py_check.sh` lints `plugin/scripts`, `scripts` and `test` with ruff, then
+runs `test/test_hooks.py` under coverage.py and prints a per-file report, then one for
+`kemory_creds.py` (token refresh and write-back). It gates on lint and on the tests, not
+on a coverage figure. ruff and coverage are pinned in `requirements-dev.txt` and live in
+a venv at `${XDG_CACHE_HOME:-$HOME/.cache}/kemory-plugin-check/venv`, never in the
+repo: `check.sh`'s `find` loops would walk it. `.coveragerc` reads `PY_CHECK_ROOT` (set
+by the script) for absolute paths, because hooks run from other working directories.
+A test that builds its child environment without `PATH` or `COVERAGE_*` is not
+measured; that is expected.
+
+The "python lint (ruff)" step runs `ruff check .` (B, E4, E7, E9 and F rules, `ruff.toml`). It uses
 a `ruff` on PATH only if it is 0.17.4, else `pipx run --spec ruff==0.17.4 ruff`, which is
 how CI gets it; with neither it fails. Bump the pin in `check.sh` deliberately.
 
@@ -105,5 +131,5 @@ a real network reply.
 A test that runs `status.sh` or `session-start.sh` must point `KEMORY_URL` at a local
 `Recorder` or a closed 127.0.0.1 port. Unset, it falls back to `KEMORY_DEFAULT_URL`
 (`lib.sh:16`) and curls the production API with a 6 s timeout. `kemory_retarget_url`
-(`lib.sh:68`) also rewrites the retired host `https://kemory.prod.apps.s9n.ai` to that
+(`lib.sh:73`) also rewrites the retired host `https://kemory.prod.apps.s9n.ai` to that
 production URL, so the retired host is no safe placeholder either.

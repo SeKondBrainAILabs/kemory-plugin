@@ -310,10 +310,11 @@ redaction does and does not guarantee.
 
 Validates manifests, shell syntax, executable bits, plugin source paths, hook
 script references, the version and content of the two manifests, the bundled
-MCP entry, changelog fragments, leaked internal references, the Python (ruff, F
-and B rules), and the hook tests.
+MCP entry, changelog fragments, leaked internal references, the Python (ruff, B,
+E4, E7, E9 and F rules), and the hook tests.
 CI runs the same
-script plus shellcheck. See [CONTRIBUTING.md](CONTRIBUTING.md).
+script plus shellcheck. `./scripts/py_check.sh` also lints the Python and reports
+test coverage, including the credential code. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ```
 plugin/
@@ -325,7 +326,7 @@ plugin/
 ├── commands/login.md             /kemory:login
 ├── commands/status.md            /kemory:status
 ├── skills/                       kemory, setup
-└── scripts/                      one script per hook, plus lib, redact and muse_log
+└── scripts/                      one script and one .py program per hook, plus lib, redact and muse_log
 ```
 
 Everything here is the plugin itself — one tree, a manifest per host, rather

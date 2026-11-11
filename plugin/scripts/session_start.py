@@ -14,7 +14,8 @@ import sys
 
 
 def instruction_only():
-    import json, os
+    import json
+    import os
     out = {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": os.environ["KEMORY_INSTRUCTION"]}}
     if os.environ.get("KEMORY_NOTICE"):
         out["systemMessage"] = os.environ["KEMORY_NOTICE"]
@@ -22,11 +23,16 @@ def instruction_only():
 
 
 def payload_cwd():
-    import json,sys; print((json.load(sys.stdin).get("cwd") or ""))
+    import json
+    import sys
+    print((json.load(sys.stdin).get("cwd") or ""))
 
 
 def stale_version():
-    import glob, json, os, re
+    import glob
+    import json
+    import os
+    import re
 
 
     def parts(v):
@@ -65,11 +71,14 @@ def stale_version():
 
 
 def setup_hint():
-    import json, os; print(json.dumps({"systemMessage": " ".join(p for p in (os.environ["KEMORY_MSG"].encode().decode("unicode_escape") + " Silence this with KEMORY_QUIET_SETUP=1.", os.environ.get("KEMORY_VERSION_NOTICE", "")) if p), "hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": os.environ["KEMORY_INSTRUCTION"]}}))
+    import json
+    import os
+    print(json.dumps({"systemMessage": " ".join(p for p in (os.environ["KEMORY_MSG"].encode().decode("unicode_escape") + " Silence this with KEMORY_QUIET_SETUP=1.", os.environ.get("KEMORY_VERSION_NOTICE", "")) if p), "hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": os.environ["KEMORY_INSTRUCTION"]}}))
 
 
 def auth_fault():
-    import json, os
+    import json
+    import os
     msg = os.environ["KEMORY_MSG"]
     if os.environ.get("KEMORY_NOTICE"):
         msg += "\n\n" + os.environ["KEMORY_NOTICE"]
@@ -77,7 +86,9 @@ def auth_fault():
 
 
 def context():
-    import json, os, sys  # noqa: F401
+    import json
+    import os
+    import sys  # noqa: F401
 
     INSTRUCTION = os.environ.get("KEMORY_INSTRUCTION", "").strip()
 

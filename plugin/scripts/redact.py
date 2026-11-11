@@ -1,10 +1,10 @@
 """Secret redaction for anything a Kemory hook sends off this machine.
 
-One copy, imported by both hooks that egress text: capture.sh (session
-digests) and prompt-recall.sh (the search query, which is the user's raw
+One copy, imported by both hooks that egress text: capture.py (session
+digests) and prompt_recall.py (the search query, which is the user's raw
 prompt). Two copies of a security regex drift, and the drift is silent.
 
-Import from a heredoc with the script directory on sys.path:
+Import with the script directory on sys.path:
 
     sys.path.insert(0, os.environ["KEMORY_SCRIPT_DIR"])
     from redact import redact

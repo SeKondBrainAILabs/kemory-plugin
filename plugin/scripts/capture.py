@@ -1,4 +1,8 @@
-import hashlib, json, os, sys, urllib.request
+import hashlib
+import json
+import os
+import sys
+import urllib.request
 
 sys.path.insert(0, os.environ["KEMORY_SCRIPT_DIR"])
 from redact import redact  # noqa: E402
