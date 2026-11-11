@@ -287,9 +287,10 @@ class HookTest(LocalServerTest):
         e.update(extra)
         return e
 
-    def run_script(self, name, payload, **env):
+    def run_script(self, name, payload, cwd=None, **env):
         return run_with_timeout([str(SCRIPTS / name)], input=json.dumps(payload),
-                              text=True, capture_output=True, env=self.env(**env))
+                              text=True, capture_output=True, env=self.env(**env),
+                              cwd=cwd)
 
     def write_credentials(self, kemory_url, env="prod"):
         d = pathlib.Path(self.home) / ".kemory"
@@ -1716,6 +1717,54 @@ class HookTest(LocalServerTest):
         r = self.run_script("status.sh", {}, KEMORY_API_KEY="k")
         self.assertIn("HTTP 200", r.stdout)
         self.assertNotIn("not the API", r.stdout)
+
+    def test_status_prints_the_installed_plugin_version(self):
+        # status.py's manifest-version program reads the manifest path from
+        # sys.argv[1]; the dispatcher must drop the subcommand first, or it
+        # opens a file called "manifest-version" and the line vanishes.
+        version = json.loads((ROOT / "plugin" / ".claude-plugin" /
+                              "plugin.json").read_text())["version"]
+        r = self.run_script("status.sh", {}, KEMORY_API_KEY="k")
+        self.assertIn(f"plugin version {version}", r.stdout)
+
+    def test_hooks_do_not_import_modules_from_the_working_directory(self):
+        # `python3 -c` and `python3 -` put the current directory first on
+        # sys.path, so a json.py in a project root ran inside every hook. A
+        # program run from a file does not. Each hook must still do its job.
+        cwd = pathlib.Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, cwd, ignore_errors=True)
+        marker = cwd / "marker"
+        (cwd / "json.py").write_text(
+            f"open({str(marker)!r}, 'w').write('ran')\n"
+            "from json import *\n")
+        stop = {"session_id": "s", "hook_event_name": "Stop",
+                "transcript_path": self.turn(*self.DECISION)}
+        recall = json.loads(
+            (ROOT / "test" / "fixtures" / "userpromptsubmit.json").read_text())
+        reminder = {"tool_response": {"memories": [1, 2],
+                                      "retrieval": {"recall_id": "rc_x"}}}
+        Recorder.search_payload = {"items": [{"memory_id": "mem-1",
+                                              "content": "hybrid beat fts",
+                                              "namespace": "shared"}], "total": 1}
+
+        capture = self.run_script("capture.sh", dict(
+            stop, transcript_path=self.transcript("a", "b", "c")),
+            cwd=cwd, KEMORY_API_KEY="k")
+        searched = self.run_script("prompt-recall.sh", recall, cwd=cwd,
+                                   KEMORY_API_KEY="k")
+        nudge = self.run_script("store-nudge.sh", stop, cwd=cwd,
+                                KEMORY_API_KEY="k", KEMORY_STORE_NUDGE="1")
+        rated = self.run_script("rate-reminder.sh", reminder, cwd=cwd)
+
+        self.assertEqual(capture.stdout, "")
+        self.assertEqual([p for _, _, p in Recorder.posts if p.endswith("/memories")],
+                         ["/api/v1/memories"])
+        self.assertIn("hybrid beat fts", searched.stdout)
+        self.assertIn("kemory_store_memory", json.loads(nudge.stdout)
+                      ["hookSpecificOutput"]["additionalContext"])
+        self.assertIn("2 memories", rated.stdout)
+        self.assertFalse(marker.exists(),
+                         "a json.py in the working directory must not run")
 
     def test_status_names_the_namespace_capture_writes_to(self):
         r = self.run_script("status.sh", {}, KEMORY_API_KEY="k")
@@ -4508,12 +4557,12 @@ OUTBOUND_CALL_PATTERN = re.compile(
 # Call sites per file, relative to plugin/. A new one fails the test until
 # PRIVACY.md says what it sends and to where.
 EXPECTED_OUTBOUND_CALL_SITES = {
-    "scripts/capture.sh": 1,
+    "scripts/capture.py": 1,
     "scripts/kemory_creds.py": 1,
     "scripts/lib.sh": 1,
     "scripts/login.py": 3,
     "scripts/mcp_bridge.py": 1,
-    "scripts/prompt-recall.sh": 1,
+    "scripts/prompt_recall.py": 1,
     "scripts/session-start.sh": 1,
     "scripts/status.sh": 2,
 }
