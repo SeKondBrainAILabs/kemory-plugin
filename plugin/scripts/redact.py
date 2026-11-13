@@ -14,11 +14,13 @@ import re
 
 # Redaction must not eat ordinary prose: developer conversations say "token"
 # and "secret" constantly, so a keyword only redacts when it is followed by an
-# actual assignment and a value long enough to be a credential.
+# actual assignment and a value long enough to be a credential. The key may be
+# quoted (JSON, YAML, a Python dict), and JSON-escaped text puts a backslash
+# before each quote.
 SECRET = re.compile(
     r'(?i)(bearer\s+[\w\-\.]{8,}'
     r'|(?:api[_-]?key|api[_-]?token|access[_-]?token|auth[_-]?token|token'
-    r'|secret|password|passwd|pwd)\s*[:=]\s*["\']?[^\s"\',;}]{6,}'
+    r'|secret|password|passwd|pwd)\\?["\']?\s*[:=]\s*\\?["\']?[^\s"\',;}]{6,}'
     r'|sk-[A-Za-z0-9]{16,}|gh[pousr]_[A-Za-z0-9]{20,}'
     r'|AKIA[0-9A-Z]{16}|xox[baprs]-[A-Za-z0-9-]{10,}'
     r'|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})'
