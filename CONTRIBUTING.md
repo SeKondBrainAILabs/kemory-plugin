@@ -55,6 +55,43 @@ echo '{"tool_response":{"retrieval":{"recall_id":"rc_test"}}}' \
   | plugin/scripts/rate-reminder.sh
 ```
 
+## Mutation check
+
+`scripts/mutate.py` removes one guard at a time from the shipped scripts and runs
+the hook tests that cover that file. A guard is a shell `exit` or `return`
+statement (`|| exit 0`, a `{ ...; exit 0; }` group, a bare line, a case arm) or a
+Python `if` that guards an early return, continue, break or raise. A mutant that
+no test fails ("survived") marks a guard whose deletion would ship green. Each
+mutant runs in a temporary copy of the tracked files, so your working tree is
+never written.
+
+```bash
+python3 scripts/mutate.py --list                      # list mutants, run no tests
+python3 scripts/mutate.py --files plugin/scripts/capture.sh
+```
+
+A full run is estimated at 1-2 hours, so it is on demand, not part of
+`check.sh`; split it with `--files`. `--only PATH:LINE` runs one mutant and
+`--tests HookTest.test_x` replaces the selected tests. `--jobs` defaults to 2
+and should stay there: the sandbox has 6 GiB of memory. Only the tool's own
+test, `python3 test/test_mutate.py`, runs in `check.sh`.
+
+Reading the output:
+
+- **survived**: no selected test failed. Add a test that fails without the
+  guard; do not edit the guard. Tests that only assert silence usually land here.
+- **timed out**: the run exceeded max(60 s, 3x its unmutated baseline). It is
+  never counted as killed. Run it again with `--only` and a larger `--timeout`.
+- **unmutated** (in `--list`): a shell line with `exit` or `return` that no
+  operator recognised. Extend the tool or check whether it is a real guard.
+
+Exit status is 1 while any survivor or timed-out mutant is not in
+`scripts/mutation-skip.json`. Add an entry (`file`, the exact original `line`
+text, a non-empty `reason`) only when the guard cannot be reached in the test
+environment, for example `command -v python3` when the tests always have
+python3. A guard that is merely untested is a missing test, not a skip. An entry
+that matches no mutant is printed as a stale-entry warning.
+
 ## Scope
 
 This repo holds client-side integrations only. Server behaviour, MCP tool

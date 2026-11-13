@@ -156,6 +156,14 @@ else
   echo "  FAIL hook tests — see /tmp/kemory-tests.log"; tail -20 /tmp/kemory-tests.log; fail=1
 fi
 
+# Self-test of the on-demand mutation tool (scripts/mutate.py), not a mutation run.
+echo "→ mutation tool tests"
+if python3 test/test_mutate.py >/tmp/kemory-mutate-tests.log 2>&1; then
+  echo "  ok   $(grep -oE 'Ran [0-9]+ tests' /tmp/kemory-mutate-tests.log) passed"
+else
+  echo "  FAIL mutation tool tests — see /tmp/kemory-mutate-tests.log"; tail -20 /tmp/kemory-mutate-tests.log; fail=1
+fi
+
 if [ "$fail" -eq 0 ]; then
   echo "PASS"
 else
