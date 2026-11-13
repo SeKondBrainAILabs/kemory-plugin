@@ -1,4 +1,7 @@
-import json, os, re, sys
+import json
+import os
+import re
+import sys
 
 def out(rid, n):
     print(rid or "unknown", n)

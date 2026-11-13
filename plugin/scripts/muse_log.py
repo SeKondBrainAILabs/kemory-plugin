@@ -1,10 +1,10 @@
 """Muse session-log lookup for the hooks that read a session transcript.
 
-One copy, imported by capture.sh and store-nudge.sh. It holds the session-id
+One copy, imported by capture.py and store_nudge.py. It holds the session-id
 guard that keeps a hostile session_id from steering the glob out of Muse's
 sessions directory, and two copies of a guard drift, and the drift is silent.
 
-Import from a heredoc with the script directory on sys.path:
+Import with the script directory on sys.path:
 
     sys.path.insert(0, os.environ["KEMORY_SCRIPT_DIR"])
     from muse_log import muse_session_log

@@ -1673,7 +1673,8 @@ class HookTest(LocalServerTest):
         self.assertNotIn("kemory login", r.stdout)
 
         self.write_credentials(self.RETIRED_URL)
-        e = self.env(PATH=path); e.pop("KEMORY_URL", None)
+        e = self.env(PATH=path)
+        e.pop("KEMORY_URL", None)
         r = run_with_timeout([str(SCRIPTS / "status.sh")], input="{}", text=True,
                            capture_output=True, env=e)
         self.assertIn("kemory login", r.stdout)
@@ -2207,7 +2208,7 @@ class McpEntryTest(LocalServerTest):
 
     def run_mcp(self, lines, with_cli=False, **extra):
         return run_with_timeout([str(SCRIPTS / "mcp.sh")],
-                              input="".join(l + "\n" for l in lines),
+                              input="".join(ln + "\n" for ln in lines),
                               text=True, capture_output=True,
                               env=self.env(with_cli, **extra))
 
@@ -2351,14 +2352,14 @@ class McpEntryTest(LocalServerTest):
 
     def test_unparseable_host_line_does_not_kill_the_bridge(self):
         r = self.run_mcp(["not json", self.REQ], KEMORY_API_KEY="k")
-        first, second = [json.loads(l) for l in r.stdout.strip().splitlines()]
+        first, second = [json.loads(ln) for ln in r.stdout.strip().splitlines()]
         self.assertIsNone(first["id"])
         self.assertEqual(second["id"], 1, "the bridge must keep serving")
 
     NOTIFICATION = '{"jsonrpc":"2.0","method":"notifications/initialized"}'
 
     def stdout_lines(self, r):
-        return [json.loads(l) for l in r.stdout.splitlines()]
+        return [json.loads(ln) for ln in r.stdout.splitlines()]
 
     def test_sse_reply_relays_the_last_data_frame(self):
         body = (b'event: message\n'
@@ -2503,7 +2504,7 @@ class McpEntryTest(LocalServerTest):
         ]
         r = self.run_mcp([json.dumps(q) for q in requests], KEMORY_API_KEY="k")
         self.assertEqual([body for _, body, _ in McpRecorder.requests], requests)
-        replies = [json.loads(l) for l in r.stdout.strip().splitlines()]
+        replies = [json.loads(ln) for ln in r.stdout.strip().splitlines()]
         self.assertEqual([x["id"] for x in replies], [1, 2, 3, 4, 5, 6])
         for reply in replies:
             self.assertEqual(reply["result"], McpRecorder.result)
@@ -2555,16 +2556,12 @@ class McpEntryTest(LocalServerTest):
         self.assertIn("mcpServers", r.stdout)
 
 
-class StaleVersionNoticeTest(unittest.TestCase):
+class StaleVersionNoticeTest(LocalServerTest):
     """Telling a user their install is behind.
 
     Nothing did. A 0.1.3 install ran for two weeks and three releases without
     the prompt-recall hook and looked healthy throughout.
     """
-
-    def setUp(self):
-        self.home = tempfile.mkdtemp()
-        self.addCleanup(shutil.rmtree, self.home, ignore_errors=True)
 
     def marketplace(self, version, name="kemory", dirname="kemory"):
         d = (pathlib.Path(self.home) / ".claude/plugins/marketplaces"
@@ -2589,6 +2586,43 @@ class StaleVersionNoticeTest(unittest.TestCase):
     def installed_version(self):
         return json.loads((ROOT / "plugin" / ".claude-plugin"
                            / "plugin.json").read_text())["version"]
+
+    def test_session_start_and_status_do_not_import_modules_from_the_working_directory(self):
+        # `python3 -c` and `python3 -` put the current directory first on
+        # sys.path, so a json.py in a project root ran inside both scripts, and
+        # inside the credential and config helpers they call. Run from a file,
+        # none of it does, and the scripts still answer.
+        cwd = pathlib.Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, cwd, ignore_errors=True)
+        marker = cwd / "marker"
+        (cwd / "json.py").write_text(
+            f"open({str(marker)!r}, 'w').write('ran')\n"
+            "from json import *\n")
+        url = f"http://127.0.0.1:{self.port}"
+        creds = pathlib.Path(self.home) / ".kemory"
+        creds.mkdir()
+        (creds / "credentials-prod").write_text(json.dumps({
+            "access_token": "tok", "refresh_token": "ref",
+            "expires_at": 9999999999.0, "client_id": "kemory-cli",
+            "issuer": "https://issuer.invalid/realms/x",
+            "kemory_url": url, "env": "prod", "version": 2}))
+        Recorder.get_payload = {"namespaces": [
+            {"namespace": "user:preferences", "summary": "Prefers concise answers."}]}
+        e = clean_env(drop_entrypoint=True)
+        e.update({"HOME": self.home, "KEMORY_URL": url})
+        fixture = (ROOT / "test" / "fixtures" / "sessionstart.json").read_text()
+
+        started = run_with_timeout([str(SCRIPTS / "session-start.sh")], input=fixture,
+                                   text=True, capture_output=True, env=e, cwd=cwd)
+        status = run_with_timeout([str(SCRIPTS / "status.sh")], input="{}",
+                                  text=True, capture_output=True, env=e, cwd=cwd)
+
+        self.assertEqual(started.returncode, 0, started.stderr)
+        self.assertIn("user:preferences", json.loads(started.stdout)
+                      ["hookSpecificOutput"]["additionalContext"])
+        self.assertIn(f"plugin version {self.installed_version()}", status.stdout)
+        self.assertFalse(marker.exists(),
+                         "a json.py in the working directory must not run")
 
     def test_says_so_when_the_marketplace_is_ahead(self):
         self.marketplace("99.0.0")
@@ -4746,6 +4780,30 @@ class PluginDependencyTest(unittest.TestCase):
         self.assertEqual(
             plugin_dependency_violations("a.sh", "cat test/fixtures/x.json", set()),
             ["a.sh: names test/fixtures/x.json"])
+
+
+    # A heredoc, `python3 -c` or `python3 -` puts the current directory first on
+    # sys.path. Every program is a file under plugin/scripts instead.
+    EMBEDDED_PYTHON = re.compile(r"python3?\s+(?:-c\b|-(?:\s|$)|<<)")
+
+    def test_no_python_program_is_embedded_in_a_shell_script(self):
+        found = []
+        for path in sorted(SCRIPTS.glob("*.sh")):
+            for number, line in enumerate(path.read_text(errors="replace").splitlines(), 1):
+                if self.EMBEDDED_PYTHON.search(line):
+                    found.append(f"{path.name}:{number}: {line.strip()}")
+        self.assertEqual(found, [], "a Python program is embedded in a shell script")
+
+    def test_embedded_python_scan_flags_each_inline_form(self):
+        for line in ('python3 -c "print(1)"', "python3 - <<'PY'", "python3 -", "x=$(python3 <<'PY'",
+                     "printf x | python3 -c 'pass' 2>/dev/null", "python -c 1"):
+            self.assertTrue(self.EMBEDDED_PYTHON.search(line), line)
+
+    def test_embedded_python_scan_accepts_files_and_command_checks(self):
+        for line in ('command -v python3 >/dev/null 2>&1 || exit 0', 'python3 "$DIR/x.py"',
+                     'exec python3 "$DIR/login.py" "$@"', "# python3 is optional",
+                     'python3 --version', 'python3 -m json.tool'):
+            self.assertIsNone(self.EMBEDDED_PYTHON.search(line), line)
 
 
 class SubprocessTimeoutTest(unittest.TestCase):

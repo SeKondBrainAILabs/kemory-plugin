@@ -1,0 +1,10 @@
+# Used by scripts/py_check.sh, which exports PY_CHECK_ROOT (the repo root).
+# Hooks run as child processes from other working directories, so a relative
+# path here would resolve against whatever directory a test happened to use.
+# The variable is not KEMORY_*: tests strip those from the environment they
+# hand to child processes.
+[run]
+patch = subprocess
+source = ${PY_CHECK_ROOT}/plugin/scripts
+data_file = ${PY_CHECK_ROOT}/.coverage
+disable_warnings = no-data-collected

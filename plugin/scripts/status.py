@@ -15,14 +15,17 @@ import sys
 
 
 def agent_last_seen():
-    import json, sys
+    import json
+    import sys
     from datetime import datetime, timezone
     try:
         rows = json.load(sys.stdin)
     except Exception:
-        print("unknown"); raise SystemExit  # noqa: B904
+        print("unknown")
+        raise SystemExit  # noqa: B904
     if not isinstance(rows, list):
-        print("unknown"); raise SystemExit
+        print("unknown")
+        raise SystemExit
     last = None
     for a in rows:
         if not isinstance(a, dict):
@@ -43,7 +46,9 @@ def agent_last_seen():
 
 
 def manifest_version():
-    import json,sys;print(json.load(open(sys.argv[1])).get("version",""))
+    import json
+    import sys
+    print(json.load(open(sys.argv[1])).get("version",""))
 
 
 COMMANDS = {

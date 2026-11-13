@@ -49,7 +49,7 @@ def parse(path):
     if not sections:
         raise ValueError(f"{path.name}: no '### <Category>' heading")
     for category, lines in sections.items():
-        if not any(l.startswith("- ") for l in lines):
+        if not any(ln.startswith("- ") for ln in lines):
             raise ValueError(f"{path.name}: '### {category}' has no '- ' bullet")
     return {c: "\n".join(lines).strip("\n") for c, lines in sections.items()}
 

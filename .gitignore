@@ -11,3 +11,7 @@ node_modules/
 # (editor typing for the module); local, not part of the plugin.
 */tsconfig.json
 */.claude-plugin/types/
+
+# Written by scripts/py_check.sh
+.coverage
+.coverage.*

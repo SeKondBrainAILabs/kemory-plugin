@@ -1,4 +1,8 @@
-import json, os, shlex, tempfile, time
+import json
+import os
+import shlex
+import tempfile
+import time
 
 CREDS = os.environ["KEMORY_CREDS"]
 
