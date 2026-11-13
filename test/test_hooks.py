@@ -766,6 +766,8 @@ class HookTest(LocalServerTest):
         "why does the api_key check fail on staging",
         "multi-task-learning-pipeline-tuning",
         "check the disk-space-monitoring-dashboard",
+        'the "password" field is required',
+        'set "token": null in the config',
     ]
 
     def _captured(self, line):
@@ -813,6 +815,31 @@ class HookTest(LocalServerTest):
                 Recorder.posts.clear()
                 self.recall(prompt=f"deploy fails with {key}, what did we decide")
                 self.assertNotIn(key[-12:], self.searches()[0]["query"])
+
+    # A quoted key (JSON, YAML, a Python dict) has its closing quote between the
+    # keyword and the separator. The fourth line is JSON-escaped text, with a
+    # literal backslash before each quote.
+    QUOTED_KEY_SECRETS = [
+        ('{"api_key": "kmy_live_9f8e7d6c5b4a3210"}', "kmy_live_9f8e7d6c5b4a3210"),
+        ('{"password": "Tr0ub4dor-and-3"}', "Tr0ub4dor-and-3"),
+        ("'access_token': 'q8Zr2LmN0pX4vB7cW1'", "q8Zr2LmN0pX4vB7cW1"),
+        ('{\\"api_key\\": \\"kmy_live_9f8e7d6c5b4a3210\\"}', "kmy_live_9f8e7d6c5b4a3210"),
+        ('"db_password" : "Tr0ub4dor-and-3"', "Tr0ub4dor-and-3"),
+    ]
+
+    def test_capture_redacts_values_after_quoted_keys(self):
+        for line, value in self.QUOTED_KEY_SECRETS:
+            with self.subTest(line=line):
+                content = self._captured(line)
+                self.assertNotIn(value, content)
+                self.assertIn("[REDACTED]", content)
+
+    def test_prompt_recall_redacts_values_after_quoted_keys(self):
+        for line, value in self.QUOTED_KEY_SECRETS:
+            with self.subTest(line=line):
+                Recorder.posts.clear()
+                self.recall(prompt=f"why does {line} get a 401")
+                self.assertNotIn(value, self.searches()[0]["query"])
 
     # A dashed sk- name followed by a secret the keyword, JWT or PEM patterns
     # catch: the name must not hide that secret. Built by concatenation.
