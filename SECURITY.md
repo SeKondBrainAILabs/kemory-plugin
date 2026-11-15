@@ -17,10 +17,13 @@ that covers, and set the variable to `0` if you do not want it.
 shapes (bearer tokens, `api_key=`/`password=` assignments, including quoted
 keys such as `"api_key": "..."`, `sk-` keys (including `sk-ant-` and
 `sk-proj-`), `gh*_`,
-AWS access key ids) before upload, and replaces whole PEM, OpenSSH and PGP
-private-key blocks, from the BEGIN line to the END line. This is
+AWS access key ids, `SECRET…KEY=` assignments such as `AWS_SECRET_ACCESS_KEY=`,
+`PRIVATE_KEY=`, `ACCESS_KEY=` and `AccountKey=`, and the password in
+`scheme://user:pass@host` URLs) before upload, and replaces whole PEM, OpenSSH
+and PGP private-key blocks, from the BEGIN line to the END line. This is
 pattern-matching, not a guarantee — a novel or unusual secret format can pass
-through. If you work with sensitive material, leave capture disabled.
+through, and so can a URL password that contains an unencoded `/`, `?` or `#`.
+If you work with sensitive material, leave capture disabled.
 
 **Local state.** The files the plugin writes under `~/.kemory/`, and what each
 holds, are listed in the Local files section of [PRIVACY.md](PRIVACY.md).

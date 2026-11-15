@@ -16,10 +16,14 @@ import re
 # and "secret" constantly, so a keyword only redacts when it is followed by an
 # actual assignment and a value long enough to be a credential. The key may be
 # quoted (JSON, YAML, a Python dict), and JSON-escaped text puts a backslash
-# before each quote.
+# before each quote. Names that end in "key" are matched too: SECRET...KEY (up to
+# 24 characters between, so AWS_SECRET_ACCESS_KEY and JWT_SECRET_SIGNING_KEY),
+# PRIVATE_KEY, ACCESS_KEY and ACCOUNT_KEY (an Azure AccountKey=). `secret` alone
+# still needs the assignment, so "the secret key is stored in vault" is prose.
 SECRET = re.compile(
     r'(?i)(bearer\s+[\w\-\.]{8,}'
     r'|(?:api[_-]?key|api[_-]?token|access[_-]?token|auth[_-]?token|token'
+    r'|secret[a-z0-9_-]{0,24}?key|private[_-]?key|access[_-]?key|account[_-]?key'
     r'|secret|password|passwd|pwd)\\?["\']?\s*[:=]\s*\\?["\']?[^\s"\',;}]{6,}'
     r'|sk-[A-Za-z0-9]{16,}|gh[pousr]_[A-Za-z0-9]{20,}'
     r'|AKIA[0-9A-Z]{16}|xox[baprs]-[A-Za-z0-9-]{10,}'
@@ -52,19 +56,32 @@ KEY = re.compile(
 # disk-... from matching.
 SK_DASHED = re.compile(r'(?i)\bsk-[A-Za-z0-9_-]{16,}')
 
+# The password in scheme://user:password@host. Only group 1 is redacted, so the
+# user and host stay readable: Python's lookbehind must be fixed-width, and a
+# .sub pass with this pattern would eat the whole URL, so redact() takes
+# m.span(1) instead. The user runs to the first ':' and may contain '@'
+# (user@server:pass@host). The greedy password class ends at the last @ before
+# a '/', '?' or '#' (urllib's rule), so a password containing '@' is fully
+# redacted. The scheme is capped at 32 characters: uncapped, the scan ran to
+# the end of the text from every word start (10-16 s on 'a.' * 20000 in the
+# synchronous prompt-recall hook).
+URL_PASSWORD = re.compile(
+    r'(?i)\b[a-z][a-z0-9+.-]{0,31}://[^\s:/]{0,256}:([^\s/?#]{1,256})@'
+)
+
 PLACEHOLDER = "[REDACTED]"
 
 
 def redact(text: str) -> str:
     """Replace credential-shaped substrings with a placeholder."""
-    # Private-key blocks go first, as their own pass (see KEY). Then the union of
-    # SECRET's and SK_DASHED's matches: with no SK_DASHED match this equals
-    # SECRET.sub(PLACEHOLDER, KEY.sub(PLACEHOLDER, text)).
+    # Private-key blocks go first, as their own pass (see KEY). Then the union
+    # of SECRET's and SK_DASHED's matches and URL_PASSWORD's password group.
+    # This equals SECRET.sub(PLACEHOLDER, KEY.sub(PLACEHOLDER, text)) only when
+    # neither SK_DASHED nor URL_PASSWORD matches.
     text = KEY.sub(PLACEHOLDER, text)
     spans = sorted(
-        m.span()
-        for pattern in (SECRET, SK_DASHED)
-        for m in pattern.finditer(text)
+        [m.span() for pattern in (SECRET, SK_DASHED) for m in pattern.finditer(text)]
+        + [m.span(1) for m in URL_PASSWORD.finditer(text)]
     )
     merged = []
     for start, end in spans:
