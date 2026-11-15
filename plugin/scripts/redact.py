@@ -56,6 +56,32 @@ KEY = re.compile(
 # disk-... from matching.
 SK_DASHED = re.compile(r'(?i)\bsk-[A-Za-z0-9_-]{16,}')
 
+# Vendor key shapes with a fixed prefix. Each is its own pattern, unioned in
+# redact(), and not a branch of SECRET: SECRET is case-insensitive, and a branch
+# there wins the leftmost match and swallows a following password=/token=
+# value (see SK_DASHED). All four are case-sensitive: the vendors issue these
+# prefixes in this case only, so matching any case catches no real key and would
+# redact long glued uppercase constants such as RK_LIVE_ followed by 20+ letters.
+#
+# A GitHub fine-grained personal access token. The two length rules keep
+# GITHUB_PAT_... names and github_pat_expiry_warning_threshold out.
+GITHUB_PAT = re.compile(r'github_pat_[A-Za-z0-9]{16,}_[A-Za-z0-9]{32,}')
+
+# A Stripe secret or restricted key, live or test. No lowercase letter may sit
+# right before it, so risk_test_... and task_test_... identifiers stay. The key
+# still matches after a JSON escape (\n, \r, \t, \uXXXX) or a percent-escape
+# (%3D, %3d), whose last character can be a lowercase letter.
+STRIPE_KEY = re.compile(
+    r'(?:(?<![a-z])|(?<=\\[nrt])|(?<=\\u[0-9A-Fa-f]{4})|(?<=%[0-9A-Fa-f]{2}))'
+    r'[sr]k_(?:live|test)_[A-Za-z0-9]{20,}'
+)
+
+# A Google API key: AIza and 35 more characters.
+GOOGLE_API_KEY = re.compile(r'AIza[0-9A-Za-z_-]{35}')
+
+# A GitLab personal access token. Other GitLab token prefixes are not covered.
+GITLAB_PAT = re.compile(r'glpat-[A-Za-z0-9_.-]{20,}')
+
 # The password in scheme://user:password@host. Only group 1 is redacted, so the
 # user and host stay readable: Python's lookbehind must be fixed-width, and a
 # .sub pass with this pattern would eat the whole URL, so redact() takes
@@ -75,12 +101,18 @@ PLACEHOLDER = "[REDACTED]"
 def redact(text: str) -> str:
     """Replace credential-shaped substrings with a placeholder."""
     # Private-key blocks go first, as their own pass (see KEY). Then the union
-    # of SECRET's and SK_DASHED's matches and URL_PASSWORD's password group.
-    # This equals SECRET.sub(PLACEHOLDER, KEY.sub(PLACEHOLDER, text)) only when
-    # neither SK_DASHED nor URL_PASSWORD matches.
+    # of the matches of SECRET, SK_DASHED and the four vendor key patterns, and
+    # URL_PASSWORD's password group. When only SECRET matches, this equals
+    # SECRET.sub(PLACEHOLDER, KEY.sub(PLACEHOLDER, text)).
     text = KEY.sub(PLACEHOLDER, text)
     spans = sorted(
-        [m.span() for pattern in (SECRET, SK_DASHED) for m in pattern.finditer(text)]
+        [
+            m.span()
+            for pattern in (
+                SECRET, SK_DASHED, GITHUB_PAT, STRIPE_KEY, GOOGLE_API_KEY, GITLAB_PAT,
+            )
+            for m in pattern.finditer(text)
+        ]
         + [m.span(1) for m in URL_PASSWORD.finditer(text)]
     )
     merged = []
