@@ -768,6 +768,16 @@ class HookTest(LocalServerTest):
         "check the disk-space-monitoring-dashboard",
         'the "password" field is required',
         'set "token": null in the config',
+        # Shapes the URL password and SECRET...KEY patterns must leave alone.
+        "ssh://git@github.com:22/org/repo",
+        "git@github.com:org/repo.git",
+        "see http://example.com:8080/path@v2",
+        "https://user@host/path",
+        "mailto:someone@example.com",
+        "http://localhost:3000?email=a@b.com",
+        "the secret key is stored in vault",
+        "secret_keyboard=abcdefgh",
+        "the private key is in ~/.ssh",
     ]
 
     def _captured(self, line):
@@ -840,6 +850,72 @@ class HookTest(LocalServerTest):
                 Recorder.posts.clear()
                 self.recall(prompt=f"why does {line} get a 401")
                 self.assertNotIn(value, self.searches()[0]["query"])
+
+    # Environment-style names that end in KEY, and passwords inside connection
+    # URLs. Values are built by concatenation so the repo holds no complete
+    # key literal.
+    AWS_SECRET = "wJalrXUtnFEMI/K7MDENG/" + "bPxRfiCYEXAMPLEKEY"
+    ENV_AND_URL_SECRETS = [
+        ("export AWS_SECRET_ACCESS_KEY=" + AWS_SECRET, AWS_SECRET),
+        ("DATABASE_URL=postgres://app:" + "S3cretPassw0rd@db.internal:5432/app",
+         "S3cretPassw0rd"),
+        ("SECRET_KEY=" + "django-insecure-" + "abcdef123", "django-insecure-abcdef123"),
+        ("JWT_SECRET_SIGNING_KEY=" + "abcdef" + "123456", "abcdef123456"),
+        ("PRIVATE_KEY=" + "0xabcdef" + "0123456789", "0xabcdef0123456789"),
+        ("AccountName=x;AccountKey=" + "abc123" + "def456==;", "abc123def456"),
+        ("redis://:" + "hunter2pass@cache:6379/0", "hunter2pass"),
+        ("postgres://app:p@ss@db/app", "p@ss"),
+        ("postgres://user@myserver:" + "S3cretPassw0rd"
+         "@myserver.postgres.database.azure.com:5432/db", "S3cretPassw0rd"),
+        ("https://me@example.com:" + "ghtoken123456@git.example.com/repo.git",
+         "ghtoken123456"),
+        ('{"aws_secret_access_key": "' + AWS_SECRET + '"}', AWS_SECRET),
+    ]
+
+    def test_capture_redacts_env_and_url_secrets(self):
+        for line, value in self.ENV_AND_URL_SECRETS:
+            with self.subTest(line=line):
+                content = self._captured(line)
+                self.assertNotIn(value, content)
+                self.assertIn("[REDACTED]", content)
+
+    def test_prompt_recall_redacts_env_and_url_secrets(self):
+        for line, value in self.ENV_AND_URL_SECRETS[:2]:
+            with self.subTest(line=line):
+                Recorder.posts.clear()
+                self.recall(prompt=f"why does {line} fail")
+                self.assertNotIn(value, self.searches()[0]["query"])
+
+    def test_url_redaction_keeps_user_and_host(self):
+        # Only the password goes: which database or remote was meant stays
+        # readable. The last two have an @ in the user name or the password.
+        cases = [
+            ("DATABASE_URL=postgres://app:" + "S3cretPassw0rd@db.internal:5432/app",
+             "DATABASE_URL=postgres://app:[REDACTED]@db.internal:5432/app"),
+            ("redis://:" + "hunter2pass@cache:6379/0",
+             "redis://:[REDACTED]@cache:6379/0"),
+            ("postgres://app:p@ss@db/app", "postgres://app:[REDACTED]@db/app"),
+            ("postgres://user@myserver:" + "S3cretPassw0rd"
+             "@myserver.postgres.database.azure.com:5432/db",
+             "postgres://user@myserver:[REDACTED]"
+             "@myserver.postgres.database.azure.com:5432/db"),
+            ("https://me@example.com:" + "ghtoken123456@git.example.com/repo.git",
+             "https://me@example.com:[REDACTED]@git.example.com/repo.git"),
+        ]
+        for line, expected in cases:
+            with self.subTest(line=line):
+                self.assertIn(expected, self._captured(line))
+
+    def test_prompt_recall_url_pattern_is_bounded(self):
+        # The synchronous recall hook has a 10 s timeout. A scheme pattern with
+        # no length cap rescans to the end of the text from every word start of
+        # 'a.a.a.', which is the shape this prompt has.
+        Recorder.posts.clear()
+        start = time.monotonic()
+        self.recall(prompt="a." * 20000)
+        elapsed = time.monotonic() - start
+        self.assertLess(elapsed, 5, f"recall took {elapsed:.1f}s")
+        self.assertTrue(self.searches(), "the hook never reached the search")
 
     # A dashed sk- name followed by a secret the keyword, JWT or PEM patterns
     # catch: the name must not hide that secret. Built by concatenation.
