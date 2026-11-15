@@ -778,6 +778,13 @@ class HookTest(LocalServerTest):
         "the secret key is stored in vault",
         "secret_keyboard=abcdefgh",
         "the private key is in ~/.ssh",
+        # Vendor key prefixes in ordinary identifiers and prose.
+        "risk_test_validateEverythingHere",
+        "export GITHUB_PAT_ROTATION_REMINDER_DAYS=30",
+        "github_pat_expiry_warning_threshold",
+        "the Stripe sk_live_ key goes in the vault",
+        "task_test_" + "abcdefghijklmnopqrstuvwxyz",
+        "RK_LIVE_" + "RESTRICTEDKEYFORWEBHOOKS",
     ]
 
     def _captured(self, line):
@@ -825,6 +832,56 @@ class HookTest(LocalServerTest):
                 Recorder.posts.clear()
                 self.recall(prompt=f"deploy fails with {key}, what did we decide")
                 self.assertNotIn(key[-12:], self.searches()[0]["query"])
+
+    # GitHub fine-grained, Stripe, Google and GitLab keys. Built by concatenation
+    # so no complete key-shaped literal sits in the repo.
+    VENDOR_KEYS = [
+        "github_pat_" + "A1b2C3d4E5f6G7h8I9j0K1" + "_" + "x9Y" * 20,
+        "sk_live_" + "51H" + "q" * 30,
+        "rk_live_" + "R7" * 15,
+        "sk_test_" + "4eC" * 10,
+        "rk_test_" + "Tt9" * 10,
+        "AIza" + "SyA" + "b_-9" * 8,
+        "glpat-" + "abcdefghij1234567890",
+    ]
+
+    def test_capture_redacts_vendor_keys(self):
+        for key in self.VENDOR_KEYS:
+            with self.subTest(key=key[:8]):
+                content = self._captured(f"my key is {key} and the call 401s")
+                self.assertNotIn(key[-12:], content)
+                self.assertNotIn(key, content)
+                self.assertIn("[REDACTED]", content)
+        sk = self.VENDOR_KEYS[1]
+        for escape in ("%3D", "%3d"):
+            with self.subTest(glued=escape):
+                content = self._captured("url ?q=key" + escape + sk)
+                self.assertNotIn(sk[-12:], content)
+
+    def test_prompt_recall_redacts_vendor_keys(self):
+        for key in self.VENDOR_KEYS:
+            with self.subTest(key=key[:8]):
+                Recorder.posts.clear()
+                self.recall(prompt=f"deploy fails with {key}, what did we decide")
+                self.assertNotIn(key[-12:], self.searches()[0]["query"])
+
+    def test_capture_redacts_json_escaped_vendor_keys(self):
+        # A JSON-escaped paste puts a literal backslash and a letter (or four
+        # hex digits) right before the key; the last one is lowercase.
+        for key in self.VENDOR_KEYS:
+            for escape in ("\\n", "\\t", "\\u003c"):
+                with self.subTest(key=key[:8], escape=escape):
+                    content = self._captured('{"env": "A=1' + escape + key + '"}')
+                    self.assertNotIn(key[-12:], content)
+                    self.assertIn("[REDACTED]", content)
+
+    def test_capture_redacts_the_secret_after_a_vendor_key(self):
+        # A vendor pattern must not swallow, or be swallowed by, a following
+        # password= assignment.
+        content = self._captured("glpat-" + "x" * 20 + "-password=" + "hunter2hunter2")
+        self.assertNotIn("hunter2hunter2", content)
+        self.assertNotIn("x" * 20, content)
+        self.assertIn("[REDACTED]", content)
 
     # A quoted key (JSON, YAML, a Python dict) has its closing quote between the
     # keyword and the separator. The fourth line is JSON-escaped text, with a

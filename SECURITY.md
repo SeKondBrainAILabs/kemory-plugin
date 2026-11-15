@@ -13,10 +13,13 @@ prompts to the Kemory instance you have configured. Review
 [plugin/README.md](plugin/README.md) and [PRIVACY.md](PRIVACY.md) for what
 that covers, and set the variable to `0` if you do not want it.
 
-**Redaction is best-effort.** `plugin/scripts/capture.sh` strips common secret
-shapes (bearer tokens, `api_key=`/`password=` assignments, including quoted
+**Redaction is best-effort.** `plugin/scripts/redact.py` strips common secret
+shapes from both the session digest and the prompt-recall query (bearer tokens,
+`api_key=`/`password=` assignments, including quoted
 keys such as `"api_key": "..."`, `sk-` keys (including `sk-ant-` and
-`sk-proj-`), `gh*_`,
+`sk-proj-`), `gh*_`, GitHub fine-grained tokens (`github_pat_`), Stripe secret
+and restricted keys (`sk_live_`, `rk_live_`, `sk_test_`, `rk_test_`), Google API
+keys (`AIza`), GitLab personal access tokens (`glpat-`),
 AWS access key ids, `SECRET…KEY=` assignments such as `AWS_SECRET_ACCESS_KEY=`,
 `PRIVATE_KEY=`, `ACCESS_KEY=` and `AccountKey=`, and the password in
 `scheme://user:pass@host` URLs) before upload, and replaces whole PEM, OpenSSH
