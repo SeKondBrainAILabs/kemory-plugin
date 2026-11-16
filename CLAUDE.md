@@ -83,9 +83,32 @@ Hooks:
 - Hook programs read the payload from `HOOK_INPUT`, not `sys.stdin`: the script has
   already consumed stdin, as `store-nudge.sh:24-25` does.
 
+Redaction (`plugin/scripts/redact.py`):
+
+- It has copies in other repos: kemory-cli `internal/hook/redact.go` (the Cursor plugin
+  runs it via `kemory hook`), hermes-kemory `hermes_kemory/redact.py` and
+  openclaw-kemory `src/capture/redact.ts`. A pattern change here needs the same change
+  there.
+- `SECRET` is one alternation, so the leftmost match wins and branch order only decides
+  between matches at the same position. A branch that can start earlier and run longer
+  (one that allows `-` and `_`) swallows the start of a later keyword, JWT or PEM match
+  and leaks its value. Give such a shape its own pattern unioned in `redact()`, as
+  `SK_DASHED` is; a pattern that must take a whole block (private keys, `KEY`) runs as
+  its own pass before `SECRET`. Compare main's and the new `redact()` on inputs like
+  `sk-prod-db-password: <value>` before widening a pattern.
+- `redact()` runs on the whole raw prompt inside the synchronous prompt-recall hook
+  (10 s timeout), before truncation, so every quantifier must be bounded: an uncapped
+  `\b[a-z][a-z0-9+.-]*://...` took about 12 s on `'a.' * 20000`.
+- GitHub push protection scans pushes to this public repo. Build vendor-key test
+  fixtures (Stripe, GitHub, Google) by string concatenation, never as one complete
+  literal (`PREFIXED_SK_KEYS` in `test/test_hooks.py`).
+
 Repo hygiene:
 
 - Every `*.sh` must be executable and every `*.json` must parse (`scripts/check.sh`).
+  Its json, sh and py `find` loops exclude only `./.git` (and `node_modules` for JSON),
+  so a venv or tool cache inside the repo is checked as if it were plugin code. Keep
+  them outside the tree.
 - The repo is public. `scripts/check.sh` fails on tracker ids and Notion links in any
   tracked file, and `release.yml` copies `CHANGELOG.md` into a public release.
 
@@ -120,8 +143,33 @@ The "python lint (ruff)" step runs `ruff check .` (B, E4, E7, E9 and F rules, `r
 a `ruff` on PATH only if it is 0.17.4, else `pipx run --spec ruff==0.17.4 ruff`, which is
 how CI gets it; with neither it fails. Bump the pin in `check.sh` deliberately.
 
+If shellcheck is not on PATH (apt unreachable, `pip install` blocked by PEP 668),
+`python3 -m venv /tmp/tools && /tmp/tools/bin/pip install shellcheck-py ruff==0.17.4`
+provides both tools in `/tmp/tools/bin`. To clone the repo into `/tmp`, use
+`git clone --no-local`: `--local` fails with "Invalid cross-device link" when the
+workspace and `/tmp` are on different filesystems.
+
+ruff's B and F rules apply to Python moved out of a heredoc into a `.py` file: it trips
+B904 on `raise SystemExit(0)` inside `except` and F401 on unused imports. If the move
+must stay verbatim, add a trailing `# noqa: B904` or `# noqa: F401` rather than
+changing the line.
+
 `python3 test/test_hooks.py` alone takes over 2 minutes. While iterating, run one class:
 `python3 test/test_hooks.py ClassName`.
+
+CI and `check.sh` run only `test/test_hooks.py`, so a new test file under `test/` never
+runs in CI. Add hook tests to `test_hooks.py`.
+
+Start scripts with `run_with_timeout`, not `subprocess.run`, and give every Popen
+`.wait()` or `.communicate()` a `timeout=`; `SubprocessTimeoutTest` fails otherwise.
+
+Tests build child environments with `clean_env()`, which drops every `KEMORY_*`
+variable, so a variable that `.coveragerc` expands must not start with `KEMORY_`.
+
+`plugin/scripts` must hold no `__pycache__` when tests run: `PrivacyDocTest` reads every
+file under it, and a `.pyc` holding a path string such as
+`/protocol/openid-connect/token` fails its endpoint scan. Compile with
+`PYTHONDONTWRITEBYTECODE=1` or delete the directory.
 
 The tests start local HTTP servers on 127.0.0.1 and point `KEMORY_URL` at them. Some
 classes (`DuplicateServerTest`, `SkippedServerTest`) set `KEMORY_URL` to the hosted API
