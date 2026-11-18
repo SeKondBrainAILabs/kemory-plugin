@@ -4981,6 +4981,12 @@ class PluginDependencyTest(unittest.TestCase):
                 path.name, path.read_text(errors="replace"), siblings)
         self.assertEqual(found, [], f"plugin/scripts depends on code that does not ship: {found}")
 
+    def test_module_names_do_not_shadow_the_stdlib_or_contain_a_hyphen(self):
+        # plugin/scripts is first on sys.path, so a json.py here would replace the real json.
+        bad = sorted(path.name for path in SCRIPTS.glob("*.py")
+                     if path.stem in sys.stdlib_module_names or "-" in path.stem)
+        self.assertEqual(bad, [], f"plugin/scripts module names that break the naming rule: {bad}")
+
     def test_muse_session_log_is_defined_once(self):
         defining = [path.name for path in sorted(SCRIPTS.iterdir())
                     if path.is_file() and "def muse_session_log" in path.read_text(errors="replace")]
