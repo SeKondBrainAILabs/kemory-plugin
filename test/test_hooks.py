@@ -1123,6 +1123,15 @@ class HookTest(LocalServerTest):
             self.assertNotIn(b2, content)
             self.assertIn(note, content)
 
+    def test_capture_redacts_the_short_last_line_of_a_truncated_private_key(self):
+        # A paste cut off mid-line leaves a base64 line shorter than a full row.
+        # It is still key material, so it must not reach the upload.
+        short = "Qm9ndXNLZXlUYWls0123"  # 20 characters
+        block = f"-----BEGIN RSA PRIVATE KEY-----\n{self.KEY_BODY[0]}\n{short}"
+        content = self._captured(f"{block}\nwhat is wrong?")
+        self.assertNotIn(short, content)
+        self.assertIn("what is wrong?", content)
+
     # --- rate reminder ----------------------------------------------------
     def test_reminder_silent_on_empty_recall(self):
         r = self.run_script("rate-reminder.sh",
