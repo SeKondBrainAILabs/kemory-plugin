@@ -1,7 +1,8 @@
 """The Python programs behind lib.sh's helpers, one function each.
 
 lib.sh runs `python3 kemory_lib.py <subcommand> [args]`. Each function is the
-program lib.sh used to pass to `python3 -c` or a heredoc, moved unchanged. They
+program lib.sh used to pass to `python3 -c` or a heredoc, moved unchanged, except
+`parse_mcp_reply`, which login.py imports too. They
 live in a file because `python3 -c` and `python3 -` put the current directory
 first on sys.path, so a json.py in a project root would run inside every hook.
 Running a file puts this directory there instead.
@@ -13,20 +14,34 @@ holds exactly what the inline program received.
 import sys
 
 
-def active_org():
+def parse_mcp_reply(raw):
+    """The JSON-RPC reply in an MCP response body, or None.
+
+    The server may answer as plain JSON or as an event stream; in the stream
+    the last non-empty `data:` line carries the result. Never raises, so a
+    caller that only wants an extra detail can fail open.
+    """
     import json
-    import sys
-    raw = sys.stdin.read().strip()
     try:
-        data = json.loads(raw)
-    except ValueError:
-        # An SSE reply: the last data line carries the result.
-        lines = [ln[5:].strip() for ln in raw.splitlines() if ln.startswith("data:")]
+        if isinstance(raw, bytes):
+            raw = raw.decode("utf-8", errors="replace")
+        raw = raw.strip()
         try:
+            data = json.loads(raw)
+        except ValueError:
+            lines = [ln[5:].strip() for ln in raw.splitlines() if ln.startswith("data:")]
+            lines = [ln for ln in lines if ln and ln != "[DONE]"]
             data = json.loads(lines[-1])
-        except Exception:
-            raise SystemExit(0)  # noqa: B904
-    sc = ((data.get("result") or {}).get("structuredContent") or {}) if isinstance(data, dict) else {}
+    except Exception:  # noqa: BLE001 — any unreadable reply means no answer
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def active_org():
+    data = parse_mcp_reply(sys.stdin.read())
+    if data is None:
+        raise SystemExit(0)
+    sc = (data.get("result") or {}).get("structuredContent") or {}
     name, org = sc.get("org_name"), sc.get("org_id")
     if isinstance(name, str) and name.strip():
         print(name.strip() + "\t" + str(org or ""))

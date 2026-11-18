@@ -37,6 +37,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from kemory_lib import parse_mcp_reply
+
 DEFAULT_URL = os.environ.get("KEMORY_DEFAULT_URL", "https://api.kemory.s9n.ai")
 ENV = os.environ.get("KEMORY_ENV", "prod")
 CLIENT_ID = os.environ.get("KEMORY_CLIENT_ID", "kemory-cli")
@@ -128,7 +130,9 @@ def active_org(base_url: str, access_token: str, org_id: str) -> tuple[str, str]
         req = urllib.request.Request(base_url.rstrip("/") + "/mcp/v1", data=request,
                                      headers=headers, method="POST")
         with urllib.request.urlopen(req, timeout=5) as response:
-            data = json.loads(response.read())
+            data = parse_mcp_reply(response.read())
+        if data is None:
+            return None
         found = (data.get("result") or {}).get("structuredContent") or {}
     except Exception:  # noqa: BLE001 — best effort, see the docstring
         return None
