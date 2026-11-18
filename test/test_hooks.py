@@ -2184,6 +2184,35 @@ class CredentialTest(LocalServerTest):
                          ["credentials-prod", "credentials-prod.tmp"],
                          "no temp file left behind")
 
+    def test_failed_write_back_still_returns_the_fresh_token_and_leaves_no_temp_file(self):
+        # A write that fails (here: the file-size limit is 0, so flushing the
+        # temp file raises) must not lose the token just fetched, must not
+        # report the session expired, and must remove its temp file.
+        creds = self.write_creds()
+        before = creds.read_text()
+        e = clean_env()
+        e["HOME"] = self.home
+        script = (f'ulimit -f 0; . "{SCRIPTS}/lib.sh"; kemory_resolve_auth'
+                  ' && echo "$KEMORY_AUTH_HEADER"'
+                  ' ; echo "expired=${KEMORY_TOKEN_EXPIRED:-0}"')
+        out = run_with_timeout(["bash", "-c", script], text=True,
+                               capture_output=True, env=e).stdout
+        self.assertEqual(len(Recorder.posts), 1, "the refresh must have run")
+        self.assertIn("Bearer fresh-token", out)
+        self.assertIn("expired=0", out)
+        self.assertEqual(creds.read_text(), before)
+        self.assertEqual([p.name for p in creds.parent.iterdir()],
+                         ["credentials-prod"], "no .tmp file left behind")
+
+    def test_refresh_reply_without_access_token_reports_expired(self):
+        creds = self.write_creds()
+        before = creds.read_text()
+        Recorder.token_payload = {"expires_in": 3600}
+        out = self.resolve().stdout
+        self.assertEqual(len(Recorder.posts), 1, "the refresh must have run")
+        self.assertIn("expired=1", out)
+        self.assertEqual(creds.read_text(), before)
+
     def test_concurrent_refreshes_leave_valid_json(self):
         creds = self.write_creds()
         e = clean_env()
