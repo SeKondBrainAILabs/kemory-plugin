@@ -2716,6 +2716,49 @@ class McpEntryTest(LocalServerTest):
         self.assertIn("mcpServers", r.stdout)
 
 
+class EmptyReply(http.server.BaseHTTPRequestHandler):
+    """Answers every GET with 200 and no body."""
+
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def log_message(self, *a):
+        pass
+
+
+class SessionStartInstructionOnlyTest(LocalServerTest):
+    """A signed-in session still gets the standing instruction when the context
+    call yields nothing: API down, or a reply with an empty body."""
+
+    handler = EmptyReply
+
+    def run_signed_in(self, url):
+        e = clean_env(drop_entrypoint=True)
+        e.update({"HOME": self.home, "KEMORY_URL": url,
+                  "KEMORY_API_KEY": "test-key"})
+        return run_with_timeout([str(SCRIPTS / "session-start.sh")], input="{}",
+                                text=True, capture_output=True, env=e)
+
+    def check_instruction_only(self, r):
+        self.assertEqual(r.returncode, 0, r.stderr)
+        out = json.loads(r.stdout)
+        ctx = out["hookSpecificOutput"]["additionalContext"]
+        self.assertEqual(out["hookSpecificOutput"]["hookEventName"], "SessionStart")
+        self.assertIn("kemory", ctx.lower())
+        self.assertNotIn("Prefers concise", ctx)
+        # A fresh HOME has no capture-default stamp, so the notice is set.
+        self.assertIn("session capture is on by default", out["systemMessage"])
+
+    def test_closed_port_with_credential_emits_instruction_and_notice(self):
+        self.check_instruction_only(self.run_signed_in("http://127.0.0.1:1"))
+
+    def test_empty_reply_with_credential_emits_instruction_and_notice(self):
+        self.check_instruction_only(
+            self.run_signed_in(f"http://127.0.0.1:{self.port}"))
+
+
 class StaleVersionNoticeTest(LocalServerTest):
     """Telling a user their install is behind.
 
