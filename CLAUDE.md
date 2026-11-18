@@ -140,11 +140,11 @@ A test that builds its child environment without `PATH` or `COVERAGE_*` is not
 measured; that is expected.
 
 The "python lint (ruff)" step runs `ruff check .` (B, E4, E7, E9 and F rules, `ruff.toml`). It uses
-a `ruff` on PATH only if it is 0.17.4, else `pipx run --spec ruff==0.17.4 ruff`, which is
+a `ruff` on PATH only if it is 0.17.5, else `pipx run --spec ruff==0.17.5 ruff`, which is
 how CI gets it; with neither it fails. Bump the pin in `check.sh` deliberately.
 
 If shellcheck is not on PATH (apt unreachable, `pip install` blocked by PEP 668),
-`python3 -m venv /tmp/tools && /tmp/tools/bin/pip install shellcheck-py ruff==0.17.4`
+`python3 -m venv /tmp/tools && /tmp/tools/bin/pip install shellcheck-py ruff==0.17.5`
 provides both tools in `/tmp/tools/bin`. To clone the repo into `/tmp`, use
 `git clone --no-local`: `--local` fails with "Invalid cross-device link" when the
 workspace and `/tmp` are on different filesystems.
