@@ -2189,6 +2189,35 @@ class CredentialTest(LocalServerTest):
                          ["credentials-prod", "credentials-prod.tmp"],
                          "no temp file left behind")
 
+    def test_failed_write_back_still_returns_the_fresh_token_and_leaves_no_temp_file(self):
+        # A write that fails (here: the file-size limit is 0, so flushing the
+        # temp file raises) must not lose the token just fetched, must not
+        # report the session expired, and must remove its temp file.
+        creds = self.write_creds()
+        before = creds.read_text()
+        e = clean_env()
+        e["HOME"] = self.home
+        script = (f'ulimit -f 0; . "{SCRIPTS}/lib.sh"; kemory_resolve_auth'
+                  ' && echo "$KEMORY_AUTH_HEADER"'
+                  ' ; echo "expired=${KEMORY_TOKEN_EXPIRED:-0}"')
+        out = run_with_timeout(["bash", "-c", script], text=True,
+                               capture_output=True, env=e).stdout
+        self.assertEqual(len(Recorder.posts), 1, "the refresh must have run")
+        self.assertIn("Bearer fresh-token", out)
+        self.assertIn("expired=0", out)
+        self.assertEqual(creds.read_text(), before)
+        self.assertEqual([p.name for p in creds.parent.iterdir()],
+                         ["credentials-prod"], "no .tmp file left behind")
+
+    def test_refresh_reply_without_access_token_reports_expired(self):
+        creds = self.write_creds()
+        before = creds.read_text()
+        Recorder.token_payload = {"expires_in": 3600}
+        out = self.resolve().stdout
+        self.assertEqual(len(Recorder.posts), 1, "the refresh must have run")
+        self.assertIn("expired=1", out)
+        self.assertEqual(creds.read_text(), before)
+
     def test_concurrent_refreshes_leave_valid_json(self):
         creds = self.write_creds()
         e = clean_env()
@@ -2719,6 +2748,49 @@ class McpEntryTest(LocalServerTest):
         self.assertEqual(r.returncode, 1,
                          "an unwrapped servers map must not pass again")
         self.assertIn("mcpServers", r.stdout)
+
+
+class EmptyReply(http.server.BaseHTTPRequestHandler):
+    """Answers every GET with 200 and no body."""
+
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def log_message(self, *a):
+        pass
+
+
+class SessionStartInstructionOnlyTest(LocalServerTest):
+    """A signed-in session still gets the standing instruction when the context
+    call yields nothing: API down, or a reply with an empty body."""
+
+    handler = EmptyReply
+
+    def run_signed_in(self, url):
+        e = clean_env(drop_entrypoint=True)
+        e.update({"HOME": self.home, "KEMORY_URL": url,
+                  "KEMORY_API_KEY": "test-key"})
+        return run_with_timeout([str(SCRIPTS / "session-start.sh")], input="{}",
+                                text=True, capture_output=True, env=e)
+
+    def check_instruction_only(self, r):
+        self.assertEqual(r.returncode, 0, r.stderr)
+        out = json.loads(r.stdout)
+        ctx = out["hookSpecificOutput"]["additionalContext"]
+        self.assertEqual(out["hookSpecificOutput"]["hookEventName"], "SessionStart")
+        self.assertIn("kemory", ctx.lower())
+        self.assertNotIn("Prefers concise", ctx)
+        # A fresh HOME has no capture-default stamp, so the notice is set.
+        self.assertIn("session capture is on by default", out["systemMessage"])
+
+    def test_closed_port_with_credential_emits_instruction_and_notice(self):
+        self.check_instruction_only(self.run_signed_in("http://127.0.0.1:1"))
+
+    def test_empty_reply_with_credential_emits_instruction_and_notice(self):
+        self.check_instruction_only(
+            self.run_signed_in(f"http://127.0.0.1:{self.port}"))
 
 
 class StaleVersionNoticeTest(LocalServerTest):
