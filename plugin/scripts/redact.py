@@ -49,6 +49,26 @@ KEY = re.compile(
     r'|(?:Proc-Type|DEK-Info|Version|Comment|Hash|Charset):[^\n]*))*)'
 )
 
+# A PuTTY .ppk file has no BEGIN line and its secret is the Private-Lines body.
+# The file states the body's length, so this pass takes the header, the next N
+# lines whatever their prefix (indent, '> ', '- ', '// ', line numbers), and the
+# Private-MAC (Private-Hash in v1) line if it follows. A line break is CR, LF,
+# CRLF or a single- or double-escaped backslash-r/n (JSON in a prompt, JSON in
+# JSON). The public lines, Comment and Argon2 headers are not secret and stay.
+# Each search starts where the last stopped, so every character is scanned once
+# and a prompt full of headers cannot stall the synchronous recall hook.
+# Limits:
+# - a header that is missing or states fewer lines than the body leaks the rest;
+# - lines joined by anything else (such as <br>) are one line;
+# - a paste cut off mid-body, or prose saying 'Private-Lines: N', loses the rest
+#   of that line and the next N lines (or the rest of the text).
+_PPK_EOL = r'(?:\r?\n|(?:\\{1,2}r)?\\{1,2}n|\\{1,2}r|\r)'
+PPK_HEADER = re.compile(r'(?i)Private-Lines:[ \t]*(\d{1,3})\b')
+PPK_BREAK = re.compile(_PPK_EOL)
+PPK_MAC = re.compile(
+    r'(?i)' + _PPK_EOL + r'[^\r\n]{0,64}?Private-(?:MAC|Hash):[ \t]*[0-9a-f]{0,128}'
+)
+
 # Anthropic and OpenAI project and service keys have dashes and underscores
 # after sk-, where SECRET's sk- branch stops. This is its own pattern and
 # redact() takes the union of both patterns' matches: as a branch inside
@@ -99,13 +119,40 @@ URL_PASSWORD = re.compile(
 PLACEHOLDER = "[REDACTED]"
 
 
+def _redact_ppk(text: str) -> str:
+    """Replace each PuTTY key's Private-Lines header, body and MAC line."""
+    out = []
+    pos = 0
+    while True:
+        m = PPK_HEADER.search(text, pos)
+        if not m:
+            break
+        end = m.end()
+        for _ in range(int(m.group(1))):
+            b = PPK_BREAK.search(text, end)
+            if not b:
+                end = len(text)
+                break
+            nb = PPK_BREAK.search(text, b.end())
+            end = nb.start() if nb else len(text)
+        mac = PPK_MAC.match(text, end)
+        if mac:
+            end = mac.end()
+        out.append(text[pos:m.start()])
+        out.append(PLACEHOLDER)
+        pos = end
+    out.append(text[pos:])
+    return "".join(out)
+
+
 def redact(text: str) -> str:
     """Replace credential-shaped substrings with a placeholder."""
-    # Private-key blocks go first, as their own pass (see KEY). Then the union
-    # of the matches of SECRET, SK_DASHED and the four vendor key patterns, and
+    # Private-key blocks go first, as their own passes: PEM-style blocks (see
+    # KEY), then PuTTY .ppk bodies (see _redact_ppk). Then the union of the
+    # matches of SECRET, SK_DASHED and the four vendor key patterns, and
     # URL_PASSWORD's password group. When only SECRET matches, this equals
-    # SECRET.sub(PLACEHOLDER, KEY.sub(PLACEHOLDER, text)).
-    text = KEY.sub(PLACEHOLDER, text)
+    # SECRET.sub(PLACEHOLDER, _redact_ppk(KEY.sub(PLACEHOLDER, text))).
+    text = _redact_ppk(KEY.sub(PLACEHOLDER, text))
     spans = sorted(
         [
             m.span()

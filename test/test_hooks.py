@@ -1132,6 +1132,99 @@ class HookTest(LocalServerTest):
         self.assertNotIn(short, content)
         self.assertIn("what is wrong?", content)
 
+    # Fake PuTTY key material only: the repo is public.
+    PPK_PUBLIC = "AAAAB3NzaC1yc2EAAAADAQAB"
+    PPK_LINE = "AAAAgQC" + "q" * 57
+    PPK_LAST = "Zz9Yy8Xx"
+
+    def _ppk(self, version="3", encrypted=False, mac=True, eol="\n", prefix=""):
+        lines = [
+            f"PuTTY-User-Key-File-{version}: ssh-rsa",
+            "Encryption: aes256-cbc" if encrypted else "Encryption: none",
+            "Comment: k",
+            "Public-Lines: 1",
+            self.PPK_PUBLIC,
+        ]
+        if encrypted:
+            lines += ["Key-Derivation: Argon2id", "Argon2-Memory: 8192",
+                      "Argon2-Passes: 13", "Argon2-Parallelism: 1",
+                      "Argon2-Salt: " + "ab" * 16]
+        lines += ["Private-Lines: 3", self.PPK_LINE, self.PPK_LINE, self.PPK_LAST]
+        if mac:
+            lines.append("Private-MAC: " + "0" * (64 if version == "3" else 40))
+        return eol.join(prefix + line for line in lines)
+
+    def test_capture_redacts_a_putty_private_key(self):
+        # PuTTY .ppk keys have no BEGIN line; the secret is the Private-Lines body.
+        body = "AAAAgQC" + "q" * 57
+        ppk = ("PuTTY-User-Key-File-3: ssh-rsa\nEncryption: none\nComment: k\n"
+               "Public-Lines: 1\nAAAAB3NzaC1yc2EAAAADAQAB\nPrivate-Lines: 2\n"
+               f"{body}\n{body}\nPrivate-MAC: " + "0" * 64)
+        content = self._captured(f"why does this key fail: {ppk}")
+        self.assertNotIn(body, content)
+
+    def test_capture_redacts_every_putty_key_version(self):
+        cases = {
+            "v3": (self._ppk() + " thanks", " thanks"),
+            "v3 encrypted": (self._ppk(encrypted=True) + " thanks", " thanks"),
+            "v2": (self._ppk(version="2") + " thanks", " thanks"),
+            "v3 truncated": (self._ppk(mac=False) + "\nwhat is wrong?",
+                             "what is wrong?"),
+        }
+        for name, (fixture, tail) in cases.items():
+            with self.subTest(version=name):
+                content = self._captured("help: " + fixture)
+                self.assertNotIn(self.PPK_LINE, content)
+                self.assertNotIn(self.PPK_LAST, content)
+                self.assertIn(self.PPK_PUBLIC, content)
+                self.assertEqual(content.count("[REDACTED]"), 1)
+                self.assertIn(tail, content)
+                if name == "v3 encrypted":
+                    self.assertIn("Argon2-Salt: ", content)
+
+    PPK_PREFIXES = ["", "  ", " " * 8, " " * 40, "\t", "> ", "# ", "// ", "- ",
+                    "* ", " * ", "| ", "    | ", ";; ", "-- ", "% ", "1: "]
+    # LF, CRLF, single-escaped (JSON in a prompt) and double-escaped (JSON in
+    # JSON) \n and \r\n.
+    PPK_EOLS = ["\n", "\r\n", "\\n", "\\r\\n", "\\\\n", "\\\\r\\\\n"]
+
+    def test_capture_redacts_putty_keys_under_any_line_prefix(self):
+        # The pass counts lines from the Private-Lines header, so what a paste
+        # puts in front of each line (indent, quote, list or comment marker, line
+        # number) cannot hide the body.
+        for eol in self.PPK_EOLS:
+            for mac in (True, False):
+                with self.subTest(eol=eol, mac=mac):
+                    keys = []
+                    for p in self.PPK_PREFIXES:
+                        tail = " thanks" if mac else eol + p + "what is wrong?"
+                        keys.append(self._ppk(eol=eol, prefix=p, mac=mac) + tail)
+                    content = self._captured("help: " + eol.join(keys))
+                    self.assertNotIn(self.PPK_LINE, content)
+                    self.assertNotIn(self.PPK_LAST, content)
+                    n = len(self.PPK_PREFIXES)
+                    self.assertEqual(content.count(self.PPK_PUBLIC), n)
+                    self.assertEqual(content.count("[REDACTED]"), n)
+                    self.assertEqual(
+                        content.count(" thanks" if mac else "what is wrong?"), n)
+
+    def test_putty_count_overreach_is_bounded(self):
+        # The pass takes the header's N lines whatever they hold, so prose that
+        # says 'Private-Lines: N' and a paste cut off mid-body lose more than the
+        # key. It over-redacts these on purpose rather than leak a body.
+        with self.subTest(case="prose"):
+            content = self._captured(
+                "set Private-Lines: 2 in the header\nnext line\nthird\nfourth line")
+            self.assertIn("fourth line", content)
+            self.assertNotIn("next line", content)
+            self.assertNotIn("third", content)
+        with self.subTest(case="cut off"):
+            content = self._captured(
+                "help: Private-Lines: 3\n" + self.PPK_LINE
+                + "\nwhat is wrong?\nmore\nkeep this")
+            self.assertNotIn(self.PPK_LINE, content)
+            self.assertIn("keep this", content)
+
     # --- rate reminder ----------------------------------------------------
     def test_reminder_silent_on_empty_recall(self):
         r = self.run_script("rate-reminder.sh",
@@ -1550,6 +1643,34 @@ class HookTest(LocalServerTest):
         self.assertIn("[REDACTED]", query)
         for line in self.KEY_BODY:
             self.assertNotIn(line, query)
+
+    def test_prompt_recall_redacts_a_putty_private_key(self):
+        self.recall(prompt="why does this key fail: " + self._ppk())
+        query = self.searches()[0]["query"]
+        self.assertIn("[REDACTED]", query)
+        self.assertNotIn(self.PPK_LINE, query)
+        self.assertNotIn(self.PPK_LAST, query)
+
+    def test_putty_redaction_is_bounded(self):
+        # The synchronous recall hook has a 10 s timeout. These are the shapes a
+        # header-driven pass could be slow on: many headers back to back, one
+        # header with a huge count and no line break, and a long body repeated.
+        # Each payload must stay under 128 KB: prompt-recall.sh exports it as
+        # HOOK_INPUT and exec refuses a larger environment string, so the hook
+        # would fail open and send no search.
+        prompts = {
+            "many headers": "Private-Lines: 1\n" * 6000,
+            "no line break": "Private-Lines: 999 " * 6000,
+            "long body twice": ("Private-Lines: 1\n" + ("A" * 64 + "\n") * 600) * 2,
+        }
+        for name, prompt in prompts.items():
+            with self.subTest(shape=name):
+                Recorder.posts.clear()
+                start = time.monotonic()
+                self.recall(prompt=prompt)
+                elapsed = time.monotonic() - start
+                self.assertLess(elapsed, 5, f"recall took {elapsed:.1f}s")
+                self.assertTrue(self.searches(), "the hook never reached the search")
 
     def test_prompt_recall_silent_on_short_prompt(self):
         self.assertEqual(self.recall(prompt="ok").stdout.strip(), "")
