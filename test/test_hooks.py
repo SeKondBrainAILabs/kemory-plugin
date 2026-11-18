@@ -816,6 +816,11 @@ class HookTest(LocalServerTest):
             with self.subTest(prose=s):
                 self.assertNotIn("[REDACTED]", self._captured(s))
 
+    def test_keyword_value_minimum_length_is_six(self):
+        # A keyword assignment redacts from six value characters; five stay.
+        self.assertIn("[REDACTED]", self._captured("password=abc123"))
+        self.assertNotIn("[REDACTED]", self._captured("password=abc12"))
+
     # Anthropic and OpenAI project keys have dashes after "sk-". Built by
     # concatenation so no complete key-shaped literal sits in the repo.
     PREFIXED_SK_KEYS = [
