@@ -86,6 +86,8 @@ class Recorder(http.server.BaseHTTPRequestHandler):
     # kemory_whoami structuredContent served on /mcp/v1; None leaves that path
     # to the default reply, as when the server cannot name the organisation.
     whoami_org = None
+    # Serve that reply as an event stream rather than plain JSON.
+    whoami_sse = False
     # Keycloak refresh response, and its status.
     token_payload: dict = {"access_token": "fresh-token", "expires_in": 3600}
     token_status: int = 200
@@ -105,8 +107,12 @@ class Recorder(http.server.BaseHTTPRequestHandler):
             raw = json.dumps({"jsonrpc": "2.0", "id": body.get("id") if isinstance(body, dict) else 1, "result": {
                 "content": [{"type": "text", "text": json.dumps(WHO)}], "isError": False,
                 "structuredContent": WHO}}).encode()
+            ctype = "application/json"
+            if Recorder.whoami_sse:
+                ctype = "text/event-stream"
+                raw = b"event: message\ndata: " + raw + b"\n\n"
             self.send_response(200)
-            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Type", ctype)
             self.end_headers()
             self.wfile.write(raw)
             return
@@ -1952,6 +1958,12 @@ class HookTest(LocalServerTest):
         self.assertIn("organisation: Acme (org-1)", r.stdout)
         self.assertIn("kemory use", r.stdout)
 
+    def test_status_names_the_active_organisation_from_an_sse_reply(self):
+        Recorder.whoami_org = {"org_id": "org-1", "org_name": "Acme"}
+        Recorder.whoami_sse = True
+        r = self.run_script("status.sh", {}, KEMORY_TOKEN="t")
+        self.assertIn("organisation: Acme (org-1)", r.stdout)
+
     def test_status_is_quiet_about_the_organisation_when_it_cannot_be_named(self):
         r = self.run_script("status.sh", {}, KEMORY_TOKEN="t")
         self.assertEqual(r.returncode, 0)
@@ -2938,6 +2950,8 @@ class IdpRecorder(http.server.BaseHTTPRequestHandler):
     # The kemory_whoami structuredContent served on /mcp/v1; None answers 404,
     # as an older server would.
     whoami: dict | None = None
+    # Serve that reply as an event stream rather than plain JSON.
+    whoami_sse = False
     whoami_headers: list = []
 
     def _json(self, status, body):
@@ -2974,7 +2988,18 @@ class IdpRecorder(http.server.BaseHTTPRequestHandler):
                 return
             body = json.loads(raw_body or b"{}")
             WHO = IdpRecorder.whoami
-            self._json(200, {"jsonrpc": "2.0", "id": body.get("id") if isinstance(body, dict) else 1, "result": {                 "content": [{"type": "text", "text": json.dumps(WHO)}], "isError": False,                 "structuredContent": WHO}})
+            reply = {"jsonrpc": "2.0", "id": body.get("id") if isinstance(body, dict) else 1, "result": {
+                "content": [{"type": "text", "text": json.dumps(WHO)}], "isError": False,
+                "structuredContent": WHO}}
+            if IdpRecorder.whoami_sse:
+                raw = b"event: message\ndata: " + json.dumps(reply).encode() + b"\n\n"
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+            else:
+                self._json(200, reply)
             return
         form = urllib.parse.parse_qs(raw_body.decode())
         flat = {k: v[0] for k, v in form.items()}
@@ -3022,6 +3047,7 @@ class DeviceLoginTest(LocalServerTest):
         IdpRecorder.requests.clear()
         IdpRecorder.token_times.clear()
         IdpRecorder.whoami = None
+        IdpRecorder.whoami_sse = False
         IdpRecorder.whoami_headers.clear()
         IdpRecorder.discovery = {"issuer": self.base}
         IdpRecorder.device_status = 200
@@ -3073,6 +3099,13 @@ class DeviceLoginTest(LocalServerTest):
         self.assertIn("Active organisation: Acme (org-default)", r.stdout)
         self.assertIn("kemory use", r.stdout)
         self.assertEqual(IdpRecorder.whoami_headers[-1].get("x-organization-id"), "org-default")
+
+    def test_login_names_the_organisation_from_an_sse_reply(self):
+        IdpRecorder.whoami = {"org_id": "org-default", "org_name": "Acme"}
+        IdpRecorder.whoami_sse = True
+        r = self.run_login()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("Active organisation: Acme (org-default)", r.stdout)
 
     def test_login_asks_in_the_organisation_kemory_use_chose(self):
         self.write_creds()  # active_org_id "org-switched-to", chosen with `kemory use`
@@ -4865,7 +4898,7 @@ PY_FROM_IMPORT_PATTERN = re.compile(r"\bfrom\s+([A-Za-z_][\w.]*)\s+import\b")
 PY_IMPORT_PATTERN = re.compile(r"(?:^|[;'\"\s])import\s+([A-Za-z_][\w.]*(?:\s*,\s*[A-Za-z_][\w.]*)*)", re.M)
 EXEC_PATTERN = re.compile(r"\bexec\s+(?:python3\s+)?(\S+)")
 REPO_PATH_PATTERN = re.compile(r"(?<![\w.-])((?:\.\./)*(?:scripts|test)/[\w./-]+)")
-ALLOWED_IMPORTS = {"redact", "muse_log"}
+ALLOWED_IMPORTS = {"redact", "muse_log", "kemory_lib"}
 ALLOWED_EXEC_COMMANDS = {"kemory"}
 
 
