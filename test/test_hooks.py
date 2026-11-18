@@ -1059,6 +1059,21 @@ class HookTest(LocalServerTest):
                     self.assertNotIn(line, content)
                 self.assertIn("done", content)
 
+    def test_capture_redacts_quoted_passwords_with_punctuation_or_spaces(self):
+        # Inside quotes, the closing quote ends the value; a comma, semicolon or
+        # space inside it is part of the password.
+        cases = [
+            ('{"password": "' + "ab,cdefgh" + '12345"}', "cdefgh12345"),
+            ('{"password": "' + "p@ss;word" + '12345"}', "word12345"),
+            ('password = "correct horse ' + 'battery staple"', "battery staple"),
+            ("pwd = 'correct horse " + "battery staple' end", "battery staple"),
+        ]
+        for line, fragment in cases:
+            with self.subTest(line=line):
+                content = self._captured(line)
+                self.assertNotIn(fragment, content)
+                self.assertIn("[REDACTED]", content)
+
     def test_capture_redacts_a_json_escaped_private_key(self):
         # A service-account file pasted whole: newlines are a literal backslash-n.
         b1, b2 = self.KEY_BODY
