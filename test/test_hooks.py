@@ -8,6 +8,7 @@ Run: python3 test/test_hooks.py
 import ast
 import base64
 import copy
+import hashlib
 import http.server
 import json
 import os
@@ -383,6 +384,28 @@ class HookTest(LocalServerTest):
                             KEMORY_API_KEY="k", KEMORY_AUTO_CAPTURE="1")
         self.assertEqual(len(Recorder.posts), 1,
                          "SessionEnd fires repeatedly; identical digests must upload once")
+
+    def test_capture_caps_posted_turn_text_at_8000_chars(self):
+        t = self.transcript("lorem ipsum " * 2000)
+        self.run_script("capture.sh", {"session_id": "s", "transcript_path": t},
+                        KEMORY_API_KEY="k", KEMORY_AUTO_CAPTURE="1")
+        self.assertEqual(len(Recorder.posts), 1)
+        _, body, _path = Recorder.posts[0]
+        turn_text = body["content"].split("\n\n")[-1]
+        self.assertEqual(len(turn_text), 8000)
+
+    def test_capture_skips_when_legacy_bare_sha_marker_matches_digest(self):
+        t = self.transcript("one task")
+        args = {"session_id": "s", "transcript_path": t}
+        self.run_script("capture.sh", args, KEMORY_API_KEY="k", KEMORY_AUTO_CAPTURE="1")
+        self.assertEqual(len(Recorder.posts), 1)
+        _, body, _path = Recorder.posts[0]
+        digest = hashlib.sha256(body["content"].encode()).hexdigest()
+        # Pre-0.2.0 marker: a bare sha256, no captured_turns high-water mark.
+        (pathlib.Path(self.home) / ".kemory" / ".captured" / "s").write_text(digest + "\n")
+        self.run_script("capture.sh", args, KEMORY_API_KEY="k", KEMORY_AUTO_CAPTURE="1")
+        self.assertEqual(len(Recorder.posts), 1,
+                         "a bare-sha marker equal to the next digest must not re-post")
 
     def test_capture_uploads_again_for_new_turns(self):
         t = self.transcript("one task")
