@@ -8,6 +8,7 @@ Run: python3 test/test_hooks.py
 import ast
 import base64
 import copy
+import fcntl
 import hashlib
 import http.server
 import json
@@ -330,6 +331,24 @@ class HookTest(LocalServerTest):
         return str(p)
 
     # --- capture ----------------------------------------------------------
+    def test_an_empty_marker_is_not_counted_as_a_captured_session(self):
+        args = {"session_id": "s1", "transcript_path": self.transcript("one turn")}
+        self.run_script("capture.sh", {**args, "hook_event_name": "Stop"},
+                        KEMORY_API_KEY="k")
+        marker = pathlib.Path(self.home) / ".kemory" / ".captured" / "s1"
+        self.assertTrue(marker.is_file())
+        self.assertEqual(marker.read_text(), "")
+
+        def status():
+            return run_with_timeout([str(SCRIPTS / "status.sh")], input="{}", text=True,
+                                    capture_output=True,
+                                    env=self.env(KEMORY_API_KEY="k")).stdout
+
+        self.assertNotIn("captured so far", status())
+        self.run_script("capture.sh", {**args, "hook_event_name": "SessionEnd",
+                                       "reason": "exit"}, KEMORY_API_KEY="k")
+        self.assertIn("1 session(s) captured so far", status())
+
     def test_capture_runs_by_default(self):
         self.run_script("capture.sh",
                         {"session_id": "s", "transcript_path": self.transcript("hi there")},
@@ -3884,6 +3903,108 @@ class FixtureCoverage(unittest.TestCase):
                 for f in (ROOT / "test" / "fixtures").glob("*.json")}
         self.assertEqual(self.UNCAPTURED & have, set(),
                          "UNCAPTURED excuses an event that already has a fixture")
+
+
+class SlowSink(http.server.BaseHTTPRequestHandler):
+    posts = []
+
+    def do_POST(self):
+        n = int(self.headers.get("Content-Length", 0))
+        SlowSink.posts.append(json.loads(self.rfile.read(n) or b"{}"))
+        time.sleep(1.5)
+        self.send_response(201)
+        self.end_headers()
+        self.wfile.write(b"{}")
+
+    def log_message(self, *args):
+        pass
+
+
+class CaptureOverlapTest(LocalServerTest):
+    """Capture runs async, so runs for one session can overlap."""
+
+    handler = SlowSink
+
+    @classmethod
+    def setUpClass(cls):
+        cls.srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), cls.handler)
+        cls.port = cls.srv.server_address[1]
+        threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.srv.shutdown()
+        cls.srv.server_close()
+
+    def setUp(self):
+        super().setUp()
+        SlowSink.posts.clear()
+
+    def env(self):
+        e = clean_env(drop_entrypoint=True)
+        e.update({"HOME": self.home, "KEMORY_URL": f"http://127.0.0.1:{self.port}",
+                  "KEMORY_API_KEY": "k"})
+        return e
+
+    def transcript(self, *messages):
+        p = pathlib.Path(self.home) / ("t%d.jsonl" % len(list(pathlib.Path(self.home).glob("t*.jsonl"))))
+        p.write_text("".join(
+            json.dumps({"type": "user", "message": {"content": m}}) + "\n"
+            for m in messages))
+        return str(p)
+
+    def start(self, event, transcript):
+        p = subprocess.Popen([str(SCRIPTS / "capture.sh")], stdin=subprocess.PIPE,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                             text=True, env=self.env())
+        p.stdin.write(json.dumps({"session_id": "s1", "hook_event_name": event,
+                                  "reason": "exit", "transcript_path": transcript}))
+        p.stdin.close()
+        return p
+
+    def test_overlapping_stop_and_session_end_store_turns_once(self):
+        t = self.transcript("add retries", "make them exponential", "cap at five")
+        procs = [self.start("Stop", t), self.start("SessionEnd", t)]
+        for p in procs:
+            p.wait(timeout=60)
+        self.assertEqual(len(SlowSink.posts), 1,
+                         "the same three turns were stored %d times" % len(SlowSink.posts))
+
+    def test_a_run_that_waited_posts_only_turns_the_first_did_not_store(self):
+        first = self.start("Stop", self.transcript("add retries", "make them exponential",
+                                                   "cap at five"))
+        deadline = time.monotonic() + 10
+        while not SlowSink.posts and time.monotonic() < deadline:
+            time.sleep(0.05)
+        second = self.start("SessionEnd", self.transcript(
+            "add retries", "make them exponential", "cap at five", "and log each retry"))
+        for p in (first, second):
+            p.wait(timeout=60)
+        self.assertEqual(len(SlowSink.posts), 2)
+        later = SlowSink.posts[1]
+        self.assertEqual(later["metadata"]["turns"], 1)
+        self.assertIn("and log each retry", later["content"])
+        self.assertNotIn("add retries", later["content"])
+
+    def test_a_run_that_cannot_get_the_lock_gives_up_without_posting(self):
+        marker = pathlib.Path(self.home) / ".kemory" / ".captured" / "s1"
+        marker.parent.mkdir(parents=True)
+        marker.write_text(json.dumps({"digest": "d", "captured_turns": 1}))
+        before = marker.read_bytes()
+        fd = os.open(marker, os.O_RDWR)
+        self.addCleanup(os.close, fd)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        t = self.transcript("add retries", "make them exponential", "cap at five")
+        started = time.monotonic()
+        r = run_with_timeout([str(SCRIPTS / "capture.sh")], text=True, env=self.env(),
+                             capture_output=True,
+                             input=json.dumps({"session_id": "s1",
+                                               "hook_event_name": "SessionEnd",
+                                               "reason": "exit", "transcript_path": t}))
+        self.assertEqual(r.returncode, 0)
+        self.assertLess(time.monotonic() - started, 9)
+        self.assertEqual(SlowSink.posts, [])
+        self.assertEqual(marker.read_bytes(), before)
 
 
 class MuseTranscriptTest(LocalServerTest):
