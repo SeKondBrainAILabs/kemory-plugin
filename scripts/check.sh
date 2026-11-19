@@ -26,6 +26,19 @@ while IFS= read -r f; do
   fi
 done < <(find . -name '*.sh' -not -path './.git/*')
 
+if command -v shellcheck >/dev/null 2>&1; then
+  echo "→ shellcheck"
+  while IFS= read -r f; do
+    if shellcheck "$f"; then
+      echo "  ok   $f"
+    else
+      echo "  FAIL $f (shellcheck)"; fail=1
+    fi
+  done < <(git ls-files '*.sh')
+else
+  echo "→ shellcheck (skipped: shellcheck not on PATH)"
+fi
+
 echo "→ python modules"
 while IFS= read -r f; do
   if python3 -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' "$f" 2>/dev/null; then
