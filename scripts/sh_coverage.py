@@ -15,7 +15,7 @@ import sys
 
 MARKER = "@SHCOV@"
 TRACE_LINE = re.compile(r"^\++" + re.escape(MARKER) + r"(.+):(\d+): ")
-HEREDOC = re.compile(r"<<-?\s*(?:'([^']+)'|\"([^\"]+)\"|\\?([A-Za-z_][A-Za-z0-9_]*))")
+HEREDOC = re.compile(r"(?<!<)<<(?!<)-?\s*(?:'([^']+)'|\"([^\"]+)\"|\\?([A-Za-z_][A-Za-z0-9_]*))")
 STRUCTURE_ONLY = re.compile(r"^(?:then|else|fi|do|done|esac|\{|\}|;;|\)|\s)+$")
 FUNCTION_HEADER = re.compile(
     r"^(?:function\s+[\w:.-]+(?:\s*\(\))?|[\w:.-]+\s*\(\))\s*\{?$")

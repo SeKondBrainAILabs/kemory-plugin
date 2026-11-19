@@ -5165,6 +5165,10 @@ class ShCoverageTest(unittest.TestCase):
         "heredoc body\n"                   # 12
         "EOF\n"                            # 13
         "greet\n"                          # 14
+        "read -r x <<< \"$1\"\n"           # 15 (here-string, not a heredoc)
+        "if [ \"$x\" = no ]; then\n"       # 16
+        "  echo never\n"                  # 17
+        "fi\n"                            # 18
     )
 
     def setUp(self):
@@ -5202,10 +5206,11 @@ class ShCoverageTest(unittest.TestCase):
         rep = self.report()
         self.assertEqual(rep.returncode, 0, rep.stderr)
         row = self.row(rep.stdout)
-        # Executable: 4, 6, 7, 9, 11, 14 (the else line, heredoc body and
-        # terminator, comment, shebang and braces are not counted). Missing: 9.
-        self.assertRegex(row, r"\b6\s+5\b")
-        self.assertTrue(row.rstrip().endswith("9"), row)
+        # Executable: 4, 6, 7, 9, 11, 14, 15, 16, 17 (the else line, heredoc body
+        # and terminator, comment, shebang and braces are not counted; the
+        # here-string on 15 must not swallow 16-17). Missing: 9, 17.
+        self.assertRegex(row, r"\b9\s+7\b")
+        self.assertTrue(row.rstrip().endswith("9, 17"), row)
         self.assertIn("heuristic", rep.stdout)
         self.assertIn("TOTAL", rep.stdout)
 
