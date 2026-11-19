@@ -36,8 +36,9 @@ shellcheck plugin/scripts/*.sh scripts/*.sh
 CI runs the first three commands. `py_check.sh` is run by hand.
 
 `check.sh` validates every JSON manifest and shell script, and lints the Python with
-ruff (B, E4, E7, E9 and F rules). It does not run shellcheck, so run that
-yourself.
+ruff (B, E4, E7, E9 and F rules). When `shellcheck` is on PATH it also shellchecks
+every tracked `*.sh`, including `plugins/cursor/scripts/`; the separate command above
+covers only `plugin/scripts` and `scripts`.
 
 `py_check.sh` lints `plugin/scripts`, `scripts` and `test` with ruff, then runs the
 hook tests under coverage.py and prints coverage per file and for the credential
