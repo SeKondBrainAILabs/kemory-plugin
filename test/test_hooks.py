@@ -821,6 +821,32 @@ class HookTest(LocalServerTest):
         self.assertIn("[REDACTED]", self._captured("password=abc123"))
         self.assertNotIn("[REDACTED]", self._captured("password=abc12"))
 
+    def test_capture_redacts_bearer_token_and_jwt(self):
+        # Neither value follows a keyword assignment, so only the bearer and
+        # eyJ patterns can catch them. Values are 20 to 30 characters per part.
+        bearer = "Zq8" + "Lm4Xv2" * 4 + "Rt"
+        jwt = "eyJ" + "hbGciOiJIUzI1NiJ9" + "." + "eyJzdWIiOiIxMjM0NTY3ODkw" + "." + "SflKxwRJSMeKKF2QT4fwpM"
+        for name, text, secret in (
+            ("bearer", f"curl -H 'Authorization: Bearer {bearer}' https://x.test", bearer),
+            ("jwt", f"the session cookie was {jwt} in the log", jwt),
+        ):
+            with self.subTest(kind=name):
+                content = self._captured(text)
+                self.assertNotIn(secret[-12:], content)
+                self.assertIn("[REDACTED]", content)
+
+    def test_prompt_recall_redacts_bearer_token_and_jwt(self):
+        bearer = "Zq8" + "Lm4Xv2" * 4 + "Rt"
+        jwt = "eyJ" + "hbGciOiJIUzI1NiJ9" + "." + "eyJzdWIiOiIxMjM0NTY3ODkw" + "." + "SflKxwRJSMeKKF2QT4fwpM"
+        for name, text, secret in (
+            ("bearer", f"401 with Authorization: Bearer {bearer}, what did we decide", bearer),
+            ("jwt", f"decode {jwt}, what did we decide", jwt),
+        ):
+            with self.subTest(kind=name):
+                Recorder.posts.clear()
+                self.recall(prompt=text)
+                self.assertNotIn(secret[-12:], self.searches()[0]["query"])
+
     # Anthropic and OpenAI project keys have dashes after "sk-". Built by
     # concatenation so no complete key-shaped literal sits in the repo.
     PREFIXED_SK_KEYS = [
