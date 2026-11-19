@@ -139,6 +139,16 @@ by the script) for absolute paths, because hooks run from other working director
 A test that builds its child environment without `PATH` or `COVERAGE_*` is not
 measured; that is expected.
 
+`./scripts/sh_coverage.sh [ClassName]` prints line coverage for `plugin/scripts/*.sh`,
+which coverage.py cannot see. It is opt-in: CI and `check.sh` do not run it. It runs
+`test/test_hooks.py` (or just the named class) with bash xtrace switched on through
+`BASH_ENV` (`scripts/sh_coverage_env.sh`), so a test whose child environment drops
+`BASH_ENV` or `SHCOV_DIR` is not measured. `scripts/sh_coverage.py` turns the traces
+into a per-file table with missing line ranges. The executable-line count is a
+heuristic, so the percentages are approximate. It exits with the test suite's status
+and gates on no figure. Traces hold expanded values, such as the tests' fake tokens, in
+a temp dir deleted on exit: never point it at real credentials.
+
 The "python lint (ruff)" step runs `ruff check .` (B, E4, E7, E9 and F rules, `ruff.toml`). It uses
 a `ruff` on PATH only if it is 0.17.5, else `pipx run --spec ruff==0.17.5 ruff`, which is
 how CI gets it; with neither it fails. Bump the pin in `check.sh` deliberately.

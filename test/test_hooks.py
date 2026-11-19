@@ -5145,6 +5145,92 @@ class PluginDependencyTest(unittest.TestCase):
             self.assertIsNone(self.EMBEDDED_PYTHON.search(line), line)
 
 
+class ShCoverageTest(unittest.TestCase):
+    """scripts/sh_coverage_env.sh and scripts/sh_coverage.py on a fixture script."""
+
+    ENV_FILE = ROOT / "scripts" / "sh_coverage_env.sh"
+    REPORTER = ROOT / "scripts" / "sh_coverage.py"
+    FIXTURE = (
+        "#!/usr/bin/env bash\n"            # 1
+        "# a comment\n"                    # 2
+        "greet() {\n"                      # 3
+        "  echo hello\n"                   # 4
+        "}\n"                              # 5
+        "if [ \"$1\" = yes ]; then\n"      # 6
+        "  echo taken\n"                   # 7
+        "else\n"                           # 8
+        "  echo untaken\n"                 # 9
+        "fi\n"                             # 10
+        "cat <<EOF\n"                      # 11
+        "heredoc body\n"                   # 12
+        "EOF\n"                            # 13
+        "greet\n"                          # 14
+    )
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.root = pathlib.Path(self.tmp) / "repo"
+        scripts = self.root / "plugin" / "scripts"
+        scripts.mkdir(parents=True)
+        self.script = scripts / "fixture.sh"
+        self.script.write_text(self.FIXTURE)
+        self.script.chmod(0o755)
+        self.traces = pathlib.Path(self.tmp) / "traces"
+        self.traces.mkdir()
+
+    def run_fixture(self, env_extra):
+        env = {k: v for k, v in os.environ.items()
+               if k not in ("BASH_ENV", "SHCOV_DIR")}
+        env.update(env_extra)
+        return run_with_timeout([str(self.script), "yes"], env=env,
+                                capture_output=True, text=True)
+
+    def report(self):
+        env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
+        return run_with_timeout(
+            [sys.executable, "-I", str(self.REPORTER), str(self.traces), str(self.root)],
+            env=env, capture_output=True, text=True)
+
+    def row(self, out):
+        return next(line for line in out.splitlines() if line.startswith("fixture.sh"))
+
+    def test_report_marks_taken_branch_hit_and_untaken_branch_missing(self):
+        done = self.run_fixture({"BASH_ENV": str(self.ENV_FILE),
+                                 "SHCOV_DIR": str(self.traces)})
+        self.assertEqual(done.returncode, 0, done.stderr)
+        rep = self.report()
+        self.assertEqual(rep.returncode, 0, rep.stderr)
+        row = self.row(rep.stdout)
+        # Executable: 4, 6, 7, 9, 11, 14 (the else line, heredoc body and
+        # terminator, comment, shebang and braces are not counted). Missing: 9.
+        self.assertRegex(row, r"\b6\s+5\b")
+        self.assertTrue(row.rstrip().endswith("9"), row)
+        self.assertIn("heuristic", rep.stdout)
+        self.assertIn("TOTAL", rep.stdout)
+
+    def test_unset_shcov_dir_leaves_output_and_status_unchanged(self):
+        plain = self.run_fixture({})
+        traced = self.run_fixture({"BASH_ENV": str(self.ENV_FILE)})
+        self.assertEqual((traced.stdout, traced.stderr, traced.returncode),
+                         (plain.stdout, plain.stderr, plain.returncode))
+        self.assertEqual(list(self.traces.iterdir()), [])
+
+    def test_garbage_trace_lines_do_not_crash_the_reporter(self):
+        (self.traces / "1.trace").write_text(
+            "+@SHCOV@no-line-number\n"
+            "+@SHCOV@fixture.sh:abc: \n"
+            "+@SHCOV@\n"
+            "\x00\xff not a trace line\n"
+            "+@SHCOV@./fixture.sh:4: echo hello\n"
+            "+@SHCOV@/elsewhere/other.sh:4: ignored\n")
+        rep = self.report()
+        self.assertEqual(rep.returncode, 0, rep.stderr)
+        self.assertNotIn("Traceback", rep.stderr)
+        self.assertNotIn("other.sh", rep.stdout)
+        self.assertRegex(self.row(rep.stdout), r"\b1\b")
+
+
 class SubprocessTimeoutTest(unittest.TestCase):
     def test_every_subprocess_call_in_this_file_is_bounded(self):
         path = pathlib.Path(__file__)
