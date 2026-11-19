@@ -123,7 +123,7 @@ shellcheck plugin/scripts/*.sh scripts/*.sh
 
 CI (`.github/workflows/check.yml`) runs the first three; `py_check.sh` is run by hand
 until a CI step is added for it. `check.sh` runs the test suite
-itself, so it takes a few minutes. Its "official manifest validation" step runs only
+itself (except under GitHub Actions, where the workflow's own step runs it), so it takes a few minutes locally. Its "official manifest validation" step runs only
 when a `claude` CLI is on PATH, so CI skips it. In an agent sandbox the `claude` on
 PATH is a wrapper that rejects `claude plugin validate` (`unknown option '--model'`),
 so that step shows FAIL for both manifests even on a clean `main`. Compare against
