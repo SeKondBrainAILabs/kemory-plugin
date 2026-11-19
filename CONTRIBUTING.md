@@ -10,7 +10,7 @@ Thanks for helping improve the Kemory plugin. By taking part you agree to the
   session. Exit `0` on every error path.
 - Keep the plugin **no-op safe**: if no Kemory server is connected, or the
   user has no credentials, nothing should error. One deliberate exception:
-  `scripts/mcp.sh` exits non-zero with a reason when it finds no credential.
+  `plugin/scripts/mcp.sh` exits non-zero with a reason when it finds no credential.
   A silent no-op there produces an MCP server that looks connected and serves
   no tools, which hides a misconfiguration instead of reporting it. Under Grok
   Build it starts signed out instead: every tool is listed and each call names
@@ -28,11 +28,16 @@ Thanks for helping improve the Kemory plugin. By taking part you agree to the
 
 ```bash
 ./scripts/check.sh
+python3 test/test_hooks.py
+shellcheck plugin/scripts/*.sh scripts/*.sh
 ./scripts/py_check.sh
 ```
 
+CI runs the first three commands. `py_check.sh` is run by hand.
+
 `check.sh` validates every JSON manifest and shell script, and lints the Python with
-ruff (B, E4, E7, E9 and F rules). CI runs the same script.
+ruff (B, E4, E7, E9 and F rules). It does not run shellcheck, so run that
+yourself.
 
 `py_check.sh` lints `plugin/scripts`, `scripts` and `test` with ruff, then runs the
 hook tests under coverage.py and prints coverage per file and for the credential

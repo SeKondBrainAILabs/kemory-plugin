@@ -150,7 +150,10 @@ else
 fi
 
 echo "→ hook behaviour tests"
-if python3 test/test_hooks.py >/tmp/kemory-tests.log 2>&1; then
+# GitHub Actions sets GITHUB_ACTIONS; its next step runs the suite with full output.
+if [ -n "${GITHUB_ACTIONS:-}" ]; then
+  echo "  skip run by the workflow's own step"
+elif python3 test/test_hooks.py >/tmp/kemory-tests.log 2>&1; then
   echo "  ok   $(grep -oE 'Ran [0-9]+ tests' /tmp/kemory-tests.log) passed"
 else
   echo "  FAIL hook tests — see /tmp/kemory-tests.log"; tail -20 /tmp/kemory-tests.log; fail=1
