@@ -1191,6 +1191,32 @@ class HookTest(LocalServerTest):
                             {"tool_response": {"retrieval": {"recall_id": "rc_only"}}})
         self.assertIn("rc_only", r.stdout)
 
+    def test_reminder_reads_a_json_string_tool_response(self):
+        payload = json.dumps({"memories": [1, 2], "retrieval": {"recall_id": "rc_str"}})
+        r = self.run_script("rate-reminder.sh", {"tool_response": payload})
+        ctx = json.loads(r.stdout)["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("2 memories", ctx)
+        self.assertIn("rc_str", ctx)
+
+    def test_reminder_silent_on_a_non_json_string_tool_response(self):
+        r = self.run_script("rate-reminder.sh", {"tool_response": "no recall here"})
+        self.assertEqual(r.stdout.strip(), "")
+
+    def test_reminder_skips_odd_blocks_to_reach_the_payload(self):
+        good = {"type": "text", "text": json.dumps(
+            {"memories": [1], "retrieval": {"recall_id": "rc_odd"}})}
+        blocks = ["not a block", {"type": "text", "text": "not json"},
+                  {"type": "image"}, good]
+        r = self.run_script("rate-reminder.sh", {"tool_response": blocks})
+        ctx = json.loads(r.stdout)["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("1 memory", ctx)
+        self.assertIn("rc_odd", ctx)
+
+    def test_reminder_silent_when_no_block_holds_a_payload(self):
+        r = self.run_script("rate-reminder.sh", {"tool_response": [
+            "not a block", {"type": "text", "text": "not json"}]})
+        self.assertEqual(r.stdout.strip(), "")
+
     def test_reminder_silent_for_non_recall_response(self):
         # A store/write response carries no recall_id and no result list.
         r = self.run_script("rate-reminder.sh",
