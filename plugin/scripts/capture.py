@@ -7,6 +7,7 @@ import urllib.request
 sys.path.insert(0, os.environ["KEMORY_SCRIPT_DIR"])
 from redact import redact  # noqa: E402
 from muse_log import muse_session_log  # noqa: E402
+from hook_request import env_int, request_setup  # noqa: E402
 
 MAX_CHARS = 8000
 
@@ -15,25 +16,7 @@ def die():
     raise SystemExit(0)
 
 
-def env_int(name, default):
-    try:
-        return int(os.environ[name])
-    except (KeyError, ValueError):
-        return default
-
-
-try:
-    url = os.environ["KEMORY_BASE_URL"]
-    auth_name, _, auth_value = os.environ["KEMORY_AUTH_HEADER"].partition(": ")
-    # The organisation `kemory use` selected, as the CLI sends it (lib.sh).
-    org_name, _, org_value = os.environ.get("KEMORY_ORG_HEADER", "").partition(": ")
-    hook = json.loads(os.environ["HOOK_INPUT"])
-except Exception:
-    die()
-if not url or not auth_value:
-    die()
-if not url.startswith(("http://", "https://")):
-    die()  # never send a credential to a non-HTTP scheme
+url, headers, hook = request_setup()
 
 # A Stop hook that runs because of a Stop hook would capture in a loop.
 if hook.get("stop_hook_active"):
@@ -179,11 +162,7 @@ req = urllib.request.Request(
             "end_reason": reason,
         },
     }).encode(),
-    headers={
-        auth_name: auth_value,
-        **({org_name: org_value} if org_value else {}),
-        "Content-Type": "application/json",
-    },
+    headers=headers,
     method="POST",
 )
 try:
