@@ -2254,6 +2254,19 @@ class CredentialTest(LocalServerTest):
         self.assertIn("expired=1", out)
         self.assertEqual(creds.read_text(), before)
 
+    def test_rotated_refresh_token_is_written_back(self):
+        # With rotation on, the old refresh token is revoked by the exchange;
+        # dropping the new one makes the next refresh fail.
+        creds = self.write_creds()
+        Recorder.token_payload = {"access_token": "fresh-token",
+                                  "refresh_token": "rotated-refresh",
+                                  "expires_in": 3600}
+        out = self.resolve().stdout
+        self.assertIn("expired=0", out)
+        saved = json.loads(creds.read_text())
+        self.assertEqual(saved["refresh_token"], "rotated-refresh")
+        self.assertEqual(saved["access_token"], "fresh-token")
+
     def test_concurrent_refreshes_leave_valid_json(self):
         creds = self.write_creds()
         e = clean_env()
