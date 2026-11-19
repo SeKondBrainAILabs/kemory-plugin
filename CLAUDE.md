@@ -21,9 +21,11 @@ Layers, from the host inward:
 3. **Shared code**: `plugin/scripts/lib.sh` (bash, sourced; credential resolution via
    `kemory_resolve_auth`, which runs `kemory_creds.py`; its other helpers run
    `kemory_lib.py`) and `plugin/scripts/redact.py` (imported by `capture.py` and
-   `prompt_recall.py`) and `plugin/scripts/muse_log.py` (imported by `capture.py` and
-   `store_nudge.py`). Each is one copy on purpose, so both paths redact alike and share
-   one session-id guard.
+   `prompt_recall.py`) and `plugin/scripts/muse_log.py` and `plugin/scripts/transcript.py`
+   (each imported by `capture.py` and `store_nudge.py`; the latter as `tlog`, because
+   both hooks name their transcript path variable `transcript`). Each is one copy on
+   purpose, so both paths redact alike, share one session-id guard and read a
+   transcript the same way.
 4. **Entry scripts**: `mcp.sh` runs `kemory mcp serve` or `mcp_bridge.py`
    (the `exec` lines in `mcp.sh`); `login.sh` runs `login.py`; `status.sh` is behind
    `/kemory:status` and runs `status.py`.
@@ -34,7 +36,7 @@ Layers, from the host inward:
 Dependency rules:
 
 - A plugin script may depend only on `lib.sh`, `kemory_creds.py`, `kemory_lib.py`,
-  `redact.py`, `muse_log.py` and its own sibling program file (`capture.py`,
+  `redact.py`, `muse_log.py`, `transcript.py` and its own sibling program file (`capture.py`,
   `prompt_recall.py`, `rate_reminder.py`, `session_start.py`, `status.py`,
   `store_nudge.py`, `login.py`, `mcp_bridge.py`). `lib.sh` runs `kemory_creds.py` and
   `kemory_lib.py`.

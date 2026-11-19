@@ -7,6 +7,7 @@ import urllib.request
 sys.path.insert(0, os.environ["KEMORY_SCRIPT_DIR"])
 from redact import redact  # noqa: E402
 from muse_log import muse_session_log  # noqa: E402
+import transcript as tlog  # noqa: E402
 
 MAX_CHARS = 8000
 
@@ -69,39 +70,23 @@ when = (
 # assistant output keeps the digest small and avoids re-storing tool dumps.
 turns = []
 try:
-    with open(transcript, errors="replace") as fh:
-        for line in fh:
-            try:
-                ev = json.loads(line)
-            except Exception:
-                continue
-            # Valid JSON is not always an object; only objects are records.
-            if not isinstance(ev, dict):
-                continue
-            # A Muse session log: a user turn is a run-started record.
-            if ev.get("type") not in ("user", "assistant") and isinstance(ev.get("payload"), dict):
-                run = ev["payload"].get("event")
-                if ev["payload"].get("kind") == "run" and isinstance(run, dict) \
-                        and run.get("kind") == "started" and isinstance(run.get("prompt"), str):
-                    t = run["prompt"].strip()
-                    if t and not t.startswith(("<", "Caveat:")):
-                        turns.append(t)
-                continue
-            if ev.get("type") != "user":
-                continue
-            message = ev.get("message")
-            content = message.get("content") if isinstance(message, dict) else None
-            if isinstance(content, list):
-                content = " ".join(
-                    p.get("text", "")
-                    if isinstance(p, dict) and isinstance(p.get("text", ""), str) else ""
-                    for p in content
-                )
-            if isinstance(content, str):
-                t = content.strip()
-                # Skip harness-injected noise, not real user intent.
-                if t and not t.startswith(("<", "Caveat:")):
+    for ev in tlog.records(transcript):
+        # A Muse session log: a user turn is a run-started record.
+        muse = tlog.muse_event(ev)
+        if muse:
+            kind, run = muse
+            if kind == "run" and run.get("kind") == "started" \
+                    and isinstance(run.get("prompt"), str):
+                t = tlog.intent(run["prompt"])
+                if t:
                     turns.append(t)
+            continue
+        if ev.get("type") != "user":
+            continue
+        # Skip harness-injected noise, not real user intent.
+        t = tlog.intent(tlog.text(ev))
+        if t:
+            turns.append(t)
 except Exception:
     die()
 
