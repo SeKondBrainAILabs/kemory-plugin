@@ -126,7 +126,7 @@ shellcheck plugin/scripts/*.sh scripts/*.sh
 
 CI (`.github/workflows/check.yml`) runs the first three; `py_check.sh` is run by hand
 until a CI step is added for it. `check.sh` runs the test suite
-itself, so it takes a few minutes. Its "official manifest validation" step runs only
+itself (except under GitHub Actions, where the workflow's own step runs it), so it takes a few minutes locally. Its "official manifest validation" step runs only
 when a `claude` CLI is on PATH, so CI skips it. In an agent sandbox the `claude` on
 PATH is a wrapper that rejects `claude plugin validate` (`unknown option '--model'`),
 so that step shows FAIL for both manifests even on a clean `main`. Compare against
@@ -143,11 +143,11 @@ A test that builds its child environment without `PATH` or `COVERAGE_*` is not
 measured; that is expected.
 
 The "python lint (ruff)" step runs `ruff check .` (B, E4, E7, E9 and F rules, `ruff.toml`). It uses
-a `ruff` on PATH only if it is 0.17.4, else `pipx run --spec ruff==0.17.4 ruff`, which is
+a `ruff` on PATH only if it is 0.17.5, else `pipx run --spec ruff==0.17.5 ruff`, which is
 how CI gets it; with neither it fails. Bump the pin in `check.sh` deliberately.
 
 If shellcheck is not on PATH (apt unreachable, `pip install` blocked by PEP 668),
-`python3 -m venv /tmp/tools && /tmp/tools/bin/pip install shellcheck-py ruff==0.17.4`
+`python3 -m venv /tmp/tools && /tmp/tools/bin/pip install shellcheck-py ruff==0.17.5`
 provides both tools in `/tmp/tools/bin`. To clone the repo into `/tmp`, use
 `git clone --no-local`: `--local` fails with "Invalid cross-device link" when the
 workspace and `/tmp` are on different filesystems.

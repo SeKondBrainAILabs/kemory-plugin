@@ -15,17 +15,22 @@ that covers, and set the variable to `0` if you do not want it.
 
 **Redaction is best-effort.** `plugin/scripts/redact.py` strips common secret
 shapes from both the session digest and the prompt-recall query (bearer tokens,
-`api_key=`/`password=` assignments, including quoted
+the credential in `Authorization: Basic` and `Proxy-Authorization: Basic`
+headers, `api_key=`/`password=` assignments, including quoted
 keys such as `"api_key": "..."`, `sk-` keys (including `sk-ant-` and
 `sk-proj-`), `gh*_`, GitHub fine-grained tokens (`github_pat_`), Stripe secret
 and restricted keys (`sk_live_`, `rk_live_`, `sk_test_`, `rk_test_`), Google API
 keys (`AIza`), GitLab personal access tokens (`glpat-`),
 AWS access key ids, `SECRET…KEY=` assignments such as `AWS_SECRET_ACCESS_KEY=`,
-`PRIVATE_KEY=`, `ACCESS_KEY=` and `AccountKey=`, and the password in
+`PRIVATE_KEY=`, `ACCESS_KEY=` and `AccountKey=`, upper-case names with a
+suffix such as `SECRET_KEY_BASE=`, `DB_PASSWORD_PROD=` and `PASSWORD2=`, and the
+password in
 `scheme://user:pass@host` URLs) before upload, and replaces whole PEM, OpenSSH
 and PGP private-key blocks, from the BEGIN line to the END line. This is
 pattern-matching, not a guarantee — a novel or unusual secret format can pass
-through, and so can a URL password that contains an unencoded `/`, `?` or `#`.
+through, and so can a URL password that contains an unencoded `/`, `?` or `#`,
+a lower-case suffixed name (`db_password_prod:`), a name with more than 6 suffix
+parts, and a digit-only value after a suffixed TOKEN name (`TOKEN_PIN_X=123456`).
 If you work with sensitive material, leave capture disabled.
 
 **Local state.** The files the plugin writes under `~/.kemory/`, and what each

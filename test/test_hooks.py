@@ -8,6 +8,8 @@ Run: python3 test/test_hooks.py
 import ast
 import base64
 import copy
+import fcntl
+import hashlib
 import http.server
 import json
 import os
@@ -86,6 +88,8 @@ class Recorder(http.server.BaseHTTPRequestHandler):
     # kemory_whoami structuredContent served on /mcp/v1; None leaves that path
     # to the default reply, as when the server cannot name the organisation.
     whoami_org = None
+    # Serve that reply as an event stream rather than plain JSON.
+    whoami_sse = False
     # Keycloak refresh response, and its status.
     token_payload: dict = {"access_token": "fresh-token", "expires_in": 3600}
     token_status: int = 200
@@ -105,8 +109,12 @@ class Recorder(http.server.BaseHTTPRequestHandler):
             raw = json.dumps({"jsonrpc": "2.0", "id": body.get("id") if isinstance(body, dict) else 1, "result": {
                 "content": [{"type": "text", "text": json.dumps(WHO)}], "isError": False,
                 "structuredContent": WHO}}).encode()
+            ctype = "application/json"
+            if Recorder.whoami_sse:
+                ctype = "text/event-stream"
+                raw = b"event: message\ndata: " + raw + b"\n\n"
             self.send_response(200)
-            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Type", ctype)
             self.end_headers()
             self.wfile.write(raw)
             return
@@ -323,6 +331,24 @@ class HookTest(LocalServerTest):
         return str(p)
 
     # --- capture ----------------------------------------------------------
+    def test_an_empty_marker_is_not_counted_as_a_captured_session(self):
+        args = {"session_id": "s1", "transcript_path": self.transcript("one turn")}
+        self.run_script("capture.sh", {**args, "hook_event_name": "Stop"},
+                        KEMORY_API_KEY="k")
+        marker = pathlib.Path(self.home) / ".kemory" / ".captured" / "s1"
+        self.assertTrue(marker.is_file())
+        self.assertEqual(marker.read_text(), "")
+
+        def status():
+            return run_with_timeout([str(SCRIPTS / "status.sh")], input="{}", text=True,
+                                    capture_output=True,
+                                    env=self.env(KEMORY_API_KEY="k")).stdout
+
+        self.assertNotIn("captured so far", status())
+        self.run_script("capture.sh", {**args, "hook_event_name": "SessionEnd",
+                                       "reason": "exit"}, KEMORY_API_KEY="k")
+        self.assertIn("1 session(s) captured so far", status())
+
     def test_capture_runs_by_default(self):
         self.run_script("capture.sh",
                         {"session_id": "s", "transcript_path": self.transcript("hi there")},
@@ -377,6 +403,28 @@ class HookTest(LocalServerTest):
                             KEMORY_API_KEY="k", KEMORY_AUTO_CAPTURE="1")
         self.assertEqual(len(Recorder.posts), 1,
                          "SessionEnd fires repeatedly; identical digests must upload once")
+
+    def test_capture_caps_posted_turn_text_at_8000_chars(self):
+        t = self.transcript("lorem ipsum " * 2000)
+        self.run_script("capture.sh", {"session_id": "s", "transcript_path": t},
+                        KEMORY_API_KEY="k", KEMORY_AUTO_CAPTURE="1")
+        self.assertEqual(len(Recorder.posts), 1)
+        _, body, _path = Recorder.posts[0]
+        turn_text = body["content"].split("\n\n")[-1]
+        self.assertEqual(len(turn_text), 8000)
+
+    def test_capture_skips_when_legacy_bare_sha_marker_matches_digest(self):
+        t = self.transcript("one task")
+        args = {"session_id": "s", "transcript_path": t}
+        self.run_script("capture.sh", args, KEMORY_API_KEY="k", KEMORY_AUTO_CAPTURE="1")
+        self.assertEqual(len(Recorder.posts), 1)
+        _, body, _path = Recorder.posts[0]
+        digest = hashlib.sha256(body["content"].encode()).hexdigest()
+        # Pre-0.2.0 marker: a bare sha256, no captured_turns high-water mark.
+        (pathlib.Path(self.home) / ".kemory" / ".captured" / "s").write_text(digest + "\n")
+        self.run_script("capture.sh", args, KEMORY_API_KEY="k", KEMORY_AUTO_CAPTURE="1")
+        self.assertEqual(len(Recorder.posts), 1,
+                         "a bare-sha marker equal to the next digest must not re-post")
 
     def test_capture_uploads_again_for_new_turns(self):
         t = self.transcript("one task")
@@ -777,7 +825,15 @@ class HookTest(LocalServerTest):
         "http://localhost:3000?email=a@b.com",
         "the secret key is stored in vault",
         "secret_keyboard=abcdefgh",
+        # Upper-case suffixed names that are counts and limits, not secrets.
+        "token_count: 123456",
+        "TOKEN_COUNT=123456",
+        "TOKEN2_COUNT=123456",
+        "MAX_TOKEN_LIMIT=4096000",
+        "SECRET_ROTATION_DAYS=90",
+        "PASSWORD_MIN_LENGTH=12",
         "the private key is in ~/.ssh",
+        "bearer tokens expire after an hour",
         # Vendor key prefixes in ordinary identifiers and prose.
         "risk_test_validateEverythingHere",
         "export GITHUB_PAT_ROTATION_REMINDER_DAYS=30",
@@ -785,6 +841,20 @@ class HookTest(LocalServerTest):
         "the Stripe sk_live_ key goes in the vault",
         "task_test_" + "abcdefghijklmnopqrstuvwxyz",
         "RK_LIVE_" + "RESTRICTEDKEYFORWEBHOOKS",
+        # Basic auth in ordinary sentences and code that holds no credential.
+        "use Basic auth over HTTPS only",
+        "the basic authorization flow is deprecated",
+        "Authorization: Basic or Bearer?",
+        "Authorization: Basic $CREDS",
+        "authentication, authorization, basic accounting",
+        "Authorization: Basic\nSomething happened here",
+        "Authorization: Basic <credentials>",
+        'headers={"Authorization": f"Basic {token}"}',
+        'req.Header.Set("Authorization", "Basic "+creds)',
+        "The Authorization: Basic header contains the user",
+        "Authorization: Basic authentication is weak",
+        "Authorization: Basic Authentication is weak",
+        "Authorization: Basic YOUR_CREDENTIALS_HERE",
     ]
 
     def _captured(self, line):
@@ -809,6 +879,37 @@ class HookTest(LocalServerTest):
         for s in self.PROSE:
             with self.subTest(prose=s):
                 self.assertNotIn("[REDACTED]", self._captured(s))
+
+    def test_keyword_value_minimum_length_is_six(self):
+        # A keyword assignment redacts from six value characters; five stay.
+        self.assertIn("[REDACTED]", self._captured("password=abc123"))
+        self.assertNotIn("[REDACTED]", self._captured("password=abc12"))
+
+    def test_capture_redacts_bearer_token_and_jwt(self):
+        # Neither value follows a keyword assignment, so only the bearer and
+        # eyJ patterns can catch them. Values are 20 to 30 characters per part.
+        bearer = "Zq8" + "Lm4Xv2" * 4 + "Rt"
+        jwt = "eyJ" + "hbGciOiJIUzI1NiJ9" + "." + "eyJzdWIiOiIxMjM0NTY3ODkw" + "." + "SflKxwRJSMeKKF2QT4fwpM"
+        for name, text, secret in (
+            ("bearer", f"curl -H 'Authorization: Bearer {bearer}' https://x.test", bearer),
+            ("jwt", f"the session cookie was {jwt} in the log", jwt),
+        ):
+            with self.subTest(kind=name):
+                content = self._captured(text)
+                self.assertNotIn(secret[-12:], content)
+                self.assertIn("[REDACTED]", content)
+
+    def test_prompt_recall_redacts_bearer_token_and_jwt(self):
+        bearer = "Zq8" + "Lm4Xv2" * 4 + "Rt"
+        jwt = "eyJ" + "hbGciOiJIUzI1NiJ9" + "." + "eyJzdWIiOiIxMjM0NTY3ODkw" + "." + "SflKxwRJSMeKKF2QT4fwpM"
+        for name, text, secret in (
+            ("bearer", f"401 with Authorization: Bearer {bearer}, what did we decide", bearer),
+            ("jwt", f"decode {jwt}, what did we decide", jwt),
+        ):
+            with self.subTest(kind=name):
+                Recorder.posts.clear()
+                self.recall(prompt=text)
+                self.assertNotIn(secret[-12:], self.searches()[0]["query"])
 
     # Anthropic and OpenAI project keys have dashes after "sk-". Built by
     # concatenation so no complete key-shaped literal sits in the repo.
@@ -974,6 +1075,87 @@ class HookTest(LocalServerTest):
         self.assertLess(elapsed, 5, f"recall took {elapsed:.1f}s")
         self.assertTrue(self.searches(), "the hook never reached the search")
 
+    def test_prompt_recall_auth_basic_pattern_is_bounded(self):
+        # Prompts shaped to make the Authorization: Basic pattern rescan: runs of
+        # separators, a bare 'basic', one very long gap and credential-sized
+        # words that only the second lookahead branch accepts. The synchronous
+        # recall hook has a 10 s timeout.
+        prompts = [
+            ("authorization:" + " " * 40) * 2000,
+            ("authorization: basic" + " " * 40) * 2000,
+            "why does authorization:" + " " * 50000 + "x fail",
+            ("Authorization: Basic " + "A" * 255 + "a" * 256 + " ") * 230,
+        ]
+        for prompt in prompts:
+            with self.subTest(prompt=prompt[:30], length=len(prompt)):
+                Recorder.posts.clear()
+                start = time.monotonic()
+                self.recall(prompt=prompt)
+                elapsed = time.monotonic() - start
+                self.assertLess(elapsed, 5, f"recall took {elapsed:.1f}s")
+                self.assertTrue(self.searches(), "the hook never reached the search")
+
+    # An upper-case keyword followed by a suffix before the separator.
+    SUFFIXED_NAMES = [
+        ("SECRET_KEY_BASE=" + "a1b2c3a1b2c3a1b2c3", "a1b2c3a1b2c3a1b2c3"),
+        ("export GITHUB_TOKEN_RO=" + "ghxabc123abc123abc123", "ghxabc123abc123abc123"),
+        ("DB_PASSWORD_PROD=" + "hunter2hunter2", "hunter2hunter2"),
+        ("DB_PASSWORD_PROD=" + "correcthorsebattery", "correcthorsebattery"),
+        ("DB_PASSWORD_PROD=" + "12345678", "12345678"),
+        ("GITHUB_TOKEN_READ_ONLY_FOR_CI=" + "abcdef123456", "abcdef123456"),
+        ("STRIPE_API_KEY_LIVE_EU_WEST_1=" + "abcdef123456", "abcdef123456"),
+        ("DB_PASSWORD2_PROD=" + "abcdef123456", "abcdef123456"),
+        ("JWT_SECRET_SIGNING_KEY_X=" + "abcdef123456", "abcdef123456"),
+        ('DB_PASSWORD_PROD: "' + 'longpassword"', "longpassword"),
+        ('{"DB_PASSWORD_PROD":"' + 'longpassword"}', "longpassword"),
+        ('{\\"DB_PASSWORD_PROD\\":\\"' + 'longpassword\\"}', "longpassword"),
+    ]
+
+    def test_capture_suffixed_name_does_not_hide_the_assignment_after_it(self):
+        content = self._captured("API_TOKEN_V2=" + "abcdef123456 password=" + "hunter22x")
+        self.assertNotIn("abcdef123456", content)
+        self.assertNotIn("hunter22x", content)
+
+    def test_capture_redacts_keyword_suffix_names(self):
+        for line, value in self.SUFFIXED_NAMES:
+            with self.subTest(line=line):
+                content = self._captured(line)
+                self.assertNotIn(value, content)
+                self.assertIn("[REDACTED]", content)
+
+    SUFFIXED_KEYWORDS = [
+        "API_KEY_X", "APIKEY_X", "API_TOKEN_X", "ACCESS_TOKEN_X", "AUTH_TOKEN_X",
+        "TOKEN_X", "SECRET_X", "PRIVATE_KEY_X", "ACCESS_KEY_X", "ACCOUNT_KEY_X",
+        "PASSWORD_X", "PASSWD_X", "PWD_X", "PASSWORD2", "TOKEN_A_B_C_D_E_F",
+    ]
+
+    def test_capture_redacts_every_suffixed_keyword(self):
+        # Exact output: with only TOKEN kept, API_TOKEN_X= would leave API_[REDACTED].
+        for name in self.SUFFIXED_KEYWORDS:
+            with self.subTest(name=name):
+                lines = self._captured(name + "=valueabc123").strip().splitlines()
+                self.assertEqual(lines[-1], "- [REDACTED]")
+
+    def test_prompt_recall_redacts_keyword_suffix_names(self):
+        for line, value in self.SUFFIXED_NAMES[:3]:
+            with self.subTest(line=line):
+                Recorder.posts.clear()
+                self.recall(prompt=f"why does {line} fail")
+                self.assertNotIn(value, self.searches()[0]["query"])
+
+    def test_prompt_recall_suffix_pattern_is_bounded(self):
+        # The hook payload travels in one environment variable, which Linux caps
+        # at 128 KiB, so the longer units repeat fewer times (about 100-120 KB).
+        for unit, count in (("TOKEN_", 20000), ("PASSWORD_", 12000),
+                            ("PASSWORD2_", 10000)):
+            with self.subTest(unit=unit):
+                Recorder.posts.clear()
+                start = time.monotonic()
+                self.recall(prompt=unit * count, session=unit)
+                elapsed = time.monotonic() - start
+                self.assertLess(elapsed, 5, f"recall took {elapsed:.1f}s")
+                self.assertTrue(self.searches(), "the hook never reached the search")
+
     # A dashed sk- name followed by a secret the keyword, JWT or PEM patterns
     # catch: the name must not hide that secret. Built by concatenation.
     SK_NAME_THEN_SECRET = [
@@ -1059,6 +1241,114 @@ class HookTest(LocalServerTest):
                     self.assertNotIn(line, content)
                 self.assertIn("done", content)
 
+    def test_capture_redacts_basic_auth_credentials(self):
+        # Basic auth is base64 of user:password, so the header value is the
+        # password. Built by concatenation so no full credential sits in the repo.
+        cred = "YWRtaW46UzNjcmV0" + "UGFzc3cwcmQ="
+        lines = (
+            "Authorization: Basic " + cred,
+            "curl -H 'Authorization: Basic " + cred + "' https://api.example.com",
+            '{"Authorization": "Basic ' + cred + '"}',
+            # JSON-escaped: a literal backslash before each quote.
+            '{\\"Authorization\\": \\"Basic ' + cred + '\\"}',
+            'conn.setRequestProperty("Authorization", "Basic ' + cred + '")',
+            "Proxy-Authorization: Basic " + cred,
+            'proxy_set_header Authorization "Basic ' + cred + '";',
+            "{'Authorization' => 'Basic " + cred + "'}",
+            "headers['Authorization'] = 'Basic " + cred + "'",
+            "HTTP_AUTHORIZATION=Basic " + cred,
+            "request.META['HTTP_AUTHORIZATION'] = 'Basic " + cred + "'",
+        )
+        for line in lines:
+            with self.subTest(line=line[:40]):
+                content = self._captured(line)
+                self.assertNotIn(cred, content)
+                self.assertIn("[REDACTED]", content)
+                # Only the credential goes: the header name and scheme stay.
+                if line == lines[0]:
+                    self.assertIn("Authorization: Basic [REDACTED]", content)
+        # Base64 with no digit, '+', '/' or padding: only its mixed case marks it.
+        letters = "YnhveTpR" + "VkhzSXZvZUxz"
+        pairs = (
+            ("Authorization: Basic admin:" + "S3cretPass", "S3cretPass"),
+            ("Authorization: Basic admin:" + "p@ss!w0rd" + "Long", "@ss!w0rdLong"),
+            ("Authorization: Basic " + letters, letters),
+            ("Authorization: Basic " + cred + " password=" + "hunter2hunter2",
+             cred, "hunter2hunter2"),
+        )
+        for line, *leaked in pairs:
+            with self.subTest(line=line[:40]):
+                content = self._captured(line)
+                for fragment in leaked:
+                    self.assertNotIn(fragment, content)
+                self.assertIn("[REDACTED]", content)
+        Recorder.posts.clear()
+        self.recall(prompt="why does Authorization: Basic " + cred + " get a 401")
+        self.assertNotIn(cred, self.searches()[0]["query"])
+
+    def test_capture_redacts_bearer_tokens_with_base64_characters(self):
+        # Opaque bearer tokens are often standard base64, with '+' and '/'.
+        token = "abc/DEF+ghi/JKL" + "mnopqrstuv=="
+        content = self._captured("Authorization: Bearer " + token)
+        self.assertNotIn("JKLmnopqrstuv", content)
+        self.assertIn("[REDACTED]", content)
+
+    # Each character of BEARER's class, early (index 2) and late (index 12) in a
+    # 22-character token.
+    BEARER_TOKENS = [
+        base[:p] + ch + base[p + 1:]
+        for base in ("Ab3dEf6hIj" + "KlMn0pQr5tUv",)
+        for ch in "+/~=-._"
+        for p in (2, 12)
+    ]
+
+    def test_capture_redacts_each_bearer_token_character(self):
+        for token in self.BEARER_TOKENS:
+            with self.subTest(token=token):
+                content = self._captured("Authorization: Bearer " + token)
+                self.assertNotIn(token[-10:], content)
+                self.assertIn("[REDACTED]", content)
+
+    def test_prompt_recall_redacts_bearer_tokens_with_base64_characters(self):
+        for token in self.BEARER_TOKENS + ["abc/DEF+ghi/JKL" + "mnopqrstuv=="]:
+            with self.subTest(token=token):
+                Recorder.posts.clear()
+                self.recall(prompt="Authorization: Bearer " + token
+                            + " returns 401, why")
+                self.assertNotIn(token[-10:], self.searches()[0]["query"])
+
+    def test_bearer_token_does_not_hide_the_secret_after_it(self):
+        # As measured: main redacts the first two cases in full, and the version
+        # of this fix that widens the bearer branch inside SECRET leaks
+        # ':cretvalue' and ':cdefghijkl', so those two guard against moving the
+        # rule into SECRET. The third leaks on main and inline both and is fixed
+        # only by the separate pattern.
+        cases = [
+            ("Bearer abcdefgh/" + "token=se:" + "cretvalue", "cretvalue"),
+            ("Bearer abcdefgh/" + "secret=ab:" + "cdefghijkl", "cdefghijkl"),
+            ("Bearer " + "password=" + "abc:defghi", "defghi"),
+        ]
+        for line, fragment in cases:
+            with self.subTest(line=line):
+                content = self._captured(line)
+                self.assertNotIn(fragment, content)
+                self.assertIn("[REDACTED]", content)
+
+    def test_capture_redacts_quoted_passwords_with_punctuation_or_spaces(self):
+        # Inside quotes, the closing quote ends the value; a comma, semicolon or
+        # space inside it is part of the password.
+        cases = [
+            ('{"password": "' + "ab,cdefgh" + '12345"}', "cdefgh12345"),
+            ('{"password": "' + "p@ss;word" + '12345"}', "word12345"),
+            ('password = "correct horse ' + 'battery staple"', "battery staple"),
+            ("pwd = 'correct horse " + "battery staple' end", "battery staple"),
+        ]
+        for line, fragment in cases:
+            with self.subTest(line=line):
+                content = self._captured(line)
+                self.assertNotIn(fragment, content)
+                self.assertIn("[REDACTED]", content)
+
     def test_capture_redacts_a_json_escaped_private_key(self):
         # A service-account file pasted whole: newlines are a literal backslash-n.
         b1, b2 = self.KEY_BODY
@@ -1096,6 +1386,15 @@ class HookTest(LocalServerTest):
             self.assertNotIn(b1, content)
             self.assertNotIn(b2, content)
             self.assertIn(note, content)
+
+    def test_capture_redacts_the_short_last_line_of_a_truncated_private_key(self):
+        # A paste cut off mid-line leaves a base64 line shorter than a full row.
+        # It is still key material, so it must not reach the upload.
+        short = "Qm9ndXNLZXlUYWls0123"  # 20 characters
+        block = f"-----BEGIN RSA PRIVATE KEY-----\n{self.KEY_BODY[0]}\n{short}"
+        content = self._captured(f"{block}\nwhat is wrong?")
+        self.assertNotIn(short, content)
+        self.assertIn("what is wrong?", content)
 
     # --- rate reminder ----------------------------------------------------
     def test_reminder_silent_on_empty_recall(self):
@@ -1155,6 +1454,32 @@ class HookTest(LocalServerTest):
         r = self.run_script("rate-reminder.sh",
                             {"tool_response": {"retrieval": {"recall_id": "rc_only"}}})
         self.assertIn("rc_only", r.stdout)
+
+    def test_reminder_reads_a_json_string_tool_response(self):
+        payload = json.dumps({"memories": [1, 2], "retrieval": {"recall_id": "rc_str"}})
+        r = self.run_script("rate-reminder.sh", {"tool_response": payload})
+        ctx = json.loads(r.stdout)["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("2 memories", ctx)
+        self.assertIn("rc_str", ctx)
+
+    def test_reminder_silent_on_a_non_json_string_tool_response(self):
+        r = self.run_script("rate-reminder.sh", {"tool_response": "no recall here"})
+        self.assertEqual(r.stdout.strip(), "")
+
+    def test_reminder_skips_odd_blocks_to_reach_the_payload(self):
+        good = {"type": "text", "text": json.dumps(
+            {"memories": [1], "retrieval": {"recall_id": "rc_odd"}})}
+        blocks = ["not a block", {"type": "text", "text": "not json"},
+                  {"type": "image"}, good]
+        r = self.run_script("rate-reminder.sh", {"tool_response": blocks})
+        ctx = json.loads(r.stdout)["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("1 memory", ctx)
+        self.assertIn("rc_odd", ctx)
+
+    def test_reminder_silent_when_no_block_holds_a_payload(self):
+        r = self.run_script("rate-reminder.sh", {"tool_response": [
+            "not a block", {"type": "text", "text": "not json"}]})
+        self.assertEqual(r.stdout.strip(), "")
 
     def test_reminder_silent_for_non_recall_response(self):
         # A store/write response carries no recall_id and no result list.
@@ -1952,6 +2277,12 @@ class HookTest(LocalServerTest):
         self.assertIn("organisation: Acme (org-1)", r.stdout)
         self.assertIn("kemory use", r.stdout)
 
+    def test_status_names_the_active_organisation_from_an_sse_reply(self):
+        Recorder.whoami_org = {"org_id": "org-1", "org_name": "Acme"}
+        Recorder.whoami_sse = True
+        r = self.run_script("status.sh", {}, KEMORY_TOKEN="t")
+        self.assertIn("organisation: Acme (org-1)", r.stdout)
+
     def test_status_is_quiet_about_the_organisation_when_it_cannot_be_named(self):
         r = self.run_script("status.sh", {}, KEMORY_TOKEN="t")
         self.assertEqual(r.returncode, 0)
@@ -2183,6 +2514,48 @@ class CredentialTest(LocalServerTest):
         self.assertEqual(sorted(p.name for p in creds.parent.iterdir()),
                          ["credentials-prod", "credentials-prod.tmp"],
                          "no temp file left behind")
+
+    def test_failed_write_back_still_returns_the_fresh_token_and_leaves_no_temp_file(self):
+        # A write that fails (here: the file-size limit is 0, so flushing the
+        # temp file raises) must not lose the token just fetched, must not
+        # report the session expired, and must remove its temp file.
+        creds = self.write_creds()
+        before = creds.read_text()
+        e = clean_env()
+        e["HOME"] = self.home
+        script = (f'ulimit -f 0; . "{SCRIPTS}/lib.sh"; kemory_resolve_auth'
+                  ' && echo "$KEMORY_AUTH_HEADER"'
+                  ' ; echo "expired=${KEMORY_TOKEN_EXPIRED:-0}"')
+        out = run_with_timeout(["bash", "-c", script], text=True,
+                               capture_output=True, env=e).stdout
+        self.assertEqual(len(Recorder.posts), 1, "the refresh must have run")
+        self.assertIn("Bearer fresh-token", out)
+        self.assertIn("expired=0", out)
+        self.assertEqual(creds.read_text(), before)
+        self.assertEqual([p.name for p in creds.parent.iterdir()],
+                         ["credentials-prod"], "no .tmp file left behind")
+
+    def test_refresh_reply_without_access_token_reports_expired(self):
+        creds = self.write_creds()
+        before = creds.read_text()
+        Recorder.token_payload = {"expires_in": 3600}
+        out = self.resolve().stdout
+        self.assertEqual(len(Recorder.posts), 1, "the refresh must have run")
+        self.assertIn("expired=1", out)
+        self.assertEqual(creds.read_text(), before)
+
+    def test_rotated_refresh_token_is_written_back(self):
+        # With rotation on, the old refresh token is revoked by the exchange;
+        # dropping the new one makes the next refresh fail.
+        creds = self.write_creds()
+        Recorder.token_payload = {"access_token": "fresh-token",
+                                  "refresh_token": "rotated-refresh",
+                                  "expires_in": 3600}
+        out = self.resolve().stdout
+        self.assertIn("expired=0", out)
+        saved = json.loads(creds.read_text())
+        self.assertEqual(saved["refresh_token"], "rotated-refresh")
+        self.assertEqual(saved["access_token"], "fresh-token")
 
     def test_concurrent_refreshes_leave_valid_json(self):
         creds = self.write_creds()
@@ -2716,6 +3089,49 @@ class McpEntryTest(LocalServerTest):
         self.assertIn("mcpServers", r.stdout)
 
 
+class EmptyReply(http.server.BaseHTTPRequestHandler):
+    """Answers every GET with 200 and no body."""
+
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def log_message(self, *a):
+        pass
+
+
+class SessionStartInstructionOnlyTest(LocalServerTest):
+    """A signed-in session still gets the standing instruction when the context
+    call yields nothing: API down, or a reply with an empty body."""
+
+    handler = EmptyReply
+
+    def run_signed_in(self, url):
+        e = clean_env(drop_entrypoint=True)
+        e.update({"HOME": self.home, "KEMORY_URL": url,
+                  "KEMORY_API_KEY": "test-key"})
+        return run_with_timeout([str(SCRIPTS / "session-start.sh")], input="{}",
+                                text=True, capture_output=True, env=e)
+
+    def check_instruction_only(self, r):
+        self.assertEqual(r.returncode, 0, r.stderr)
+        out = json.loads(r.stdout)
+        ctx = out["hookSpecificOutput"]["additionalContext"]
+        self.assertEqual(out["hookSpecificOutput"]["hookEventName"], "SessionStart")
+        self.assertIn("kemory", ctx.lower())
+        self.assertNotIn("Prefers concise", ctx)
+        # A fresh HOME has no capture-default stamp, so the notice is set.
+        self.assertIn("session capture is on by default", out["systemMessage"])
+
+    def test_closed_port_with_credential_emits_instruction_and_notice(self):
+        self.check_instruction_only(self.run_signed_in("http://127.0.0.1:1"))
+
+    def test_empty_reply_with_credential_emits_instruction_and_notice(self):
+        self.check_instruction_only(
+            self.run_signed_in(f"http://127.0.0.1:{self.port}"))
+
+
 class StaleVersionNoticeTest(LocalServerTest):
     """Telling a user their install is behind.
 
@@ -2938,6 +3354,8 @@ class IdpRecorder(http.server.BaseHTTPRequestHandler):
     # The kemory_whoami structuredContent served on /mcp/v1; None answers 404,
     # as an older server would.
     whoami: dict | None = None
+    # Serve that reply as an event stream rather than plain JSON.
+    whoami_sse = False
     whoami_headers: list = []
 
     def _json(self, status, body):
@@ -2974,7 +3392,18 @@ class IdpRecorder(http.server.BaseHTTPRequestHandler):
                 return
             body = json.loads(raw_body or b"{}")
             WHO = IdpRecorder.whoami
-            self._json(200, {"jsonrpc": "2.0", "id": body.get("id") if isinstance(body, dict) else 1, "result": {                 "content": [{"type": "text", "text": json.dumps(WHO)}], "isError": False,                 "structuredContent": WHO}})
+            reply = {"jsonrpc": "2.0", "id": body.get("id") if isinstance(body, dict) else 1, "result": {
+                "content": [{"type": "text", "text": json.dumps(WHO)}], "isError": False,
+                "structuredContent": WHO}}
+            if IdpRecorder.whoami_sse:
+                raw = b"event: message\ndata: " + json.dumps(reply).encode() + b"\n\n"
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Content-Length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+            else:
+                self._json(200, reply)
             return
         form = urllib.parse.parse_qs(raw_body.decode())
         flat = {k: v[0] for k, v in form.items()}
@@ -3022,6 +3451,7 @@ class DeviceLoginTest(LocalServerTest):
         IdpRecorder.requests.clear()
         IdpRecorder.token_times.clear()
         IdpRecorder.whoami = None
+        IdpRecorder.whoami_sse = False
         IdpRecorder.whoami_headers.clear()
         IdpRecorder.discovery = {"issuer": self.base}
         IdpRecorder.device_status = 200
@@ -3073,6 +3503,13 @@ class DeviceLoginTest(LocalServerTest):
         self.assertIn("Active organisation: Acme (org-default)", r.stdout)
         self.assertIn("kemory use", r.stdout)
         self.assertEqual(IdpRecorder.whoami_headers[-1].get("x-organization-id"), "org-default")
+
+    def test_login_names_the_organisation_from_an_sse_reply(self):
+        IdpRecorder.whoami = {"org_id": "org-default", "org_name": "Acme"}
+        IdpRecorder.whoami_sse = True
+        r = self.run_login()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("Active organisation: Acme (org-default)", r.stdout)
 
     def test_login_asks_in_the_organisation_kemory_use_chose(self):
         self.write_creds()  # active_org_id "org-switched-to", chosen with `kemory use`
@@ -3613,6 +4050,108 @@ class FixtureCoverage(unittest.TestCase):
                 for f in (ROOT / "test" / "fixtures").glob("*.json")}
         self.assertEqual(self.UNCAPTURED & have, set(),
                          "UNCAPTURED excuses an event that already has a fixture")
+
+
+class SlowSink(http.server.BaseHTTPRequestHandler):
+    posts = []
+
+    def do_POST(self):
+        n = int(self.headers.get("Content-Length", 0))
+        SlowSink.posts.append(json.loads(self.rfile.read(n) or b"{}"))
+        time.sleep(1.5)
+        self.send_response(201)
+        self.end_headers()
+        self.wfile.write(b"{}")
+
+    def log_message(self, *args):
+        pass
+
+
+class CaptureOverlapTest(LocalServerTest):
+    """Capture runs async, so runs for one session can overlap."""
+
+    handler = SlowSink
+
+    @classmethod
+    def setUpClass(cls):
+        cls.srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), cls.handler)
+        cls.port = cls.srv.server_address[1]
+        threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.srv.shutdown()
+        cls.srv.server_close()
+
+    def setUp(self):
+        super().setUp()
+        SlowSink.posts.clear()
+
+    def env(self):
+        e = clean_env(drop_entrypoint=True)
+        e.update({"HOME": self.home, "KEMORY_URL": f"http://127.0.0.1:{self.port}",
+                  "KEMORY_API_KEY": "k"})
+        return e
+
+    def transcript(self, *messages):
+        p = pathlib.Path(self.home) / ("t%d.jsonl" % len(list(pathlib.Path(self.home).glob("t*.jsonl"))))
+        p.write_text("".join(
+            json.dumps({"type": "user", "message": {"content": m}}) + "\n"
+            for m in messages))
+        return str(p)
+
+    def start(self, event, transcript):
+        p = subprocess.Popen([str(SCRIPTS / "capture.sh")], stdin=subprocess.PIPE,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                             text=True, env=self.env())
+        p.stdin.write(json.dumps({"session_id": "s1", "hook_event_name": event,
+                                  "reason": "exit", "transcript_path": transcript}))
+        p.stdin.close()
+        return p
+
+    def test_overlapping_stop_and_session_end_store_turns_once(self):
+        t = self.transcript("add retries", "make them exponential", "cap at five")
+        procs = [self.start("Stop", t), self.start("SessionEnd", t)]
+        for p in procs:
+            p.wait(timeout=60)
+        self.assertEqual(len(SlowSink.posts), 1,
+                         "the same three turns were stored %d times" % len(SlowSink.posts))
+
+    def test_a_run_that_waited_posts_only_turns_the_first_did_not_store(self):
+        first = self.start("Stop", self.transcript("add retries", "make them exponential",
+                                                   "cap at five"))
+        deadline = time.monotonic() + 10
+        while not SlowSink.posts and time.monotonic() < deadline:
+            time.sleep(0.05)
+        second = self.start("SessionEnd", self.transcript(
+            "add retries", "make them exponential", "cap at five", "and log each retry"))
+        for p in (first, second):
+            p.wait(timeout=60)
+        self.assertEqual(len(SlowSink.posts), 2)
+        later = SlowSink.posts[1]
+        self.assertEqual(later["metadata"]["turns"], 1)
+        self.assertIn("and log each retry", later["content"])
+        self.assertNotIn("add retries", later["content"])
+
+    def test_a_run_that_cannot_get_the_lock_gives_up_without_posting(self):
+        marker = pathlib.Path(self.home) / ".kemory" / ".captured" / "s1"
+        marker.parent.mkdir(parents=True)
+        marker.write_text(json.dumps({"digest": "d", "captured_turns": 1}))
+        before = marker.read_bytes()
+        fd = os.open(marker, os.O_RDWR)
+        self.addCleanup(os.close, fd)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        t = self.transcript("add retries", "make them exponential", "cap at five")
+        started = time.monotonic()
+        r = run_with_timeout([str(SCRIPTS / "capture.sh")], text=True, env=self.env(),
+                             capture_output=True,
+                             input=json.dumps({"session_id": "s1",
+                                               "hook_event_name": "SessionEnd",
+                                               "reason": "exit", "transcript_path": t}))
+        self.assertEqual(r.returncode, 0)
+        self.assertLess(time.monotonic() - started, 9)
+        self.assertEqual(SlowSink.posts, [])
+        self.assertEqual(marker.read_bytes(), before)
 
 
 class MuseTranscriptTest(LocalServerTest):
@@ -4865,7 +5404,7 @@ PY_FROM_IMPORT_PATTERN = re.compile(r"\bfrom\s+([A-Za-z_][\w.]*)\s+import\b")
 PY_IMPORT_PATTERN = re.compile(r"(?:^|[;'\"\s])import\s+([A-Za-z_][\w.]*(?:\s*,\s*[A-Za-z_][\w.]*)*)", re.M)
 EXEC_PATTERN = re.compile(r"\bexec\s+(?:python3\s+)?(\S+)")
 REPO_PATH_PATTERN = re.compile(r"(?<![\w.-])((?:\.\./)*(?:scripts|test)/[\w./-]+)")
-ALLOWED_IMPORTS = {"redact", "muse_log"}
+ALLOWED_IMPORTS = {"redact", "muse_log", "kemory_lib"}
 ALLOWED_EXEC_COMMANDS = {"kemory"}
 
 
@@ -4908,6 +5447,12 @@ class PluginDependencyTest(unittest.TestCase):
             found += plugin_dependency_violations(
                 path.name, path.read_text(errors="replace"), siblings)
         self.assertEqual(found, [], f"plugin/scripts depends on code that does not ship: {found}")
+
+    def test_module_names_do_not_shadow_the_stdlib_or_contain_a_hyphen(self):
+        # plugin/scripts is first on sys.path, so a json.py here would replace the real json.
+        bad = sorted(path.name for path in SCRIPTS.glob("*.py")
+                     if path.stem in sys.stdlib_module_names or "-" in path.stem)
+        self.assertEqual(bad, [], f"plugin/scripts module names that break the naming rule: {bad}")
 
     def test_muse_session_log_is_defined_once(self):
         defining = [path.name for path in sorted(SCRIPTS.iterdir())

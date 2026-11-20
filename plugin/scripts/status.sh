@@ -301,7 +301,7 @@ if [ "${KEMORY_AUTO_CAPTURE:-1}" = "1" ]; then
 else
   info "session capture disabled — KEMORY_AUTO_CAPTURE=0 is set"
 fi
-n=$(find "$HOME/.kemory/.captured" -type f 2>/dev/null | wc -l | tr -d ' ')
+n=$(find "$HOME/.kemory/.captured" -type f -size +0c 2>/dev/null | wc -l | tr -d ' ')
 [ "${n:-0}" -gt 0 ] && info "$n session(s) captured so far"
 
 # --- context injection -----------------------------------------------------

@@ -22,5 +22,6 @@ python3 scripts/release.py X.Y.Z
 ```
 
 It adds `## [X.Y.Z] — <today>` to `CHANGELOG.md` with every fragment under its
-heading, bumps the version in both plugin manifests and the marketplace entry,
-and deletes the fragments. Merging that PR tags and publishes the release.
+heading, bumps the version in six files (the Claude, Grok and Muse plugin
+manifests, the Cursor plugin manifest, and the Claude and Cursor marketplace
+entries), and deletes the fragments. Merging that PR tags and publishes the release.
