@@ -841,6 +841,20 @@ class HookTest(LocalServerTest):
         "the Stripe sk_live_ key goes in the vault",
         "task_test_" + "abcdefghijklmnopqrstuvwxyz",
         "RK_LIVE_" + "RESTRICTEDKEYFORWEBHOOKS",
+        # Basic auth in ordinary sentences and code that holds no credential.
+        "use Basic auth over HTTPS only",
+        "the basic authorization flow is deprecated",
+        "Authorization: Basic or Bearer?",
+        "Authorization: Basic $CREDS",
+        "authentication, authorization, basic accounting",
+        "Authorization: Basic\nSomething happened here",
+        "Authorization: Basic <credentials>",
+        'headers={"Authorization": f"Basic {token}"}',
+        'req.Header.Set("Authorization", "Basic "+creds)',
+        "The Authorization: Basic header contains the user",
+        "Authorization: Basic authentication is weak",
+        "Authorization: Basic Authentication is weak",
+        "Authorization: Basic YOUR_CREDENTIALS_HERE",
     ]
 
     def _captured(self, line):
@@ -1061,6 +1075,26 @@ class HookTest(LocalServerTest):
         self.assertLess(elapsed, 5, f"recall took {elapsed:.1f}s")
         self.assertTrue(self.searches(), "the hook never reached the search")
 
+    def test_prompt_recall_auth_basic_pattern_is_bounded(self):
+        # Prompts shaped to make the Authorization: Basic pattern rescan: runs of
+        # separators, a bare 'basic', one very long gap and credential-sized
+        # words that only the second lookahead branch accepts. The synchronous
+        # recall hook has a 10 s timeout.
+        prompts = [
+            ("authorization:" + " " * 40) * 2000,
+            ("authorization: basic" + " " * 40) * 2000,
+            "why does authorization:" + " " * 50000 + "x fail",
+            ("Authorization: Basic " + "A" * 255 + "a" * 256 + " ") * 230,
+        ]
+        for prompt in prompts:
+            with self.subTest(prompt=prompt[:30], length=len(prompt)):
+                Recorder.posts.clear()
+                start = time.monotonic()
+                self.recall(prompt=prompt)
+                elapsed = time.monotonic() - start
+                self.assertLess(elapsed, 5, f"recall took {elapsed:.1f}s")
+                self.assertTrue(self.searches(), "the hook never reached the search")
+
     # An upper-case keyword followed by a suffix before the separator.
     SUFFIXED_NAMES = [
         ("SECRET_KEY_BASE=" + "a1b2c3a1b2c3a1b2c3", "a1b2c3a1b2c3a1b2c3"),
@@ -1206,6 +1240,51 @@ class HookTest(LocalServerTest):
                 for line in self.KEY_BODY:
                     self.assertNotIn(line, content)
                 self.assertIn("done", content)
+
+    def test_capture_redacts_basic_auth_credentials(self):
+        # Basic auth is base64 of user:password, so the header value is the
+        # password. Built by concatenation so no full credential sits in the repo.
+        cred = "YWRtaW46UzNjcmV0" + "UGFzc3cwcmQ="
+        lines = (
+            "Authorization: Basic " + cred,
+            "curl -H 'Authorization: Basic " + cred + "' https://api.example.com",
+            '{"Authorization": "Basic ' + cred + '"}',
+            # JSON-escaped: a literal backslash before each quote.
+            '{\\"Authorization\\": \\"Basic ' + cred + '\\"}',
+            'conn.setRequestProperty("Authorization", "Basic ' + cred + '")',
+            "Proxy-Authorization: Basic " + cred,
+            'proxy_set_header Authorization "Basic ' + cred + '";',
+            "{'Authorization' => 'Basic " + cred + "'}",
+            "headers['Authorization'] = 'Basic " + cred + "'",
+            "HTTP_AUTHORIZATION=Basic " + cred,
+            "request.META['HTTP_AUTHORIZATION'] = 'Basic " + cred + "'",
+        )
+        for line in lines:
+            with self.subTest(line=line[:40]):
+                content = self._captured(line)
+                self.assertNotIn(cred, content)
+                self.assertIn("[REDACTED]", content)
+                # Only the credential goes: the header name and scheme stay.
+                if line == lines[0]:
+                    self.assertIn("Authorization: Basic [REDACTED]", content)
+        # Base64 with no digit, '+', '/' or padding: only its mixed case marks it.
+        letters = "YnhveTpR" + "VkhzSXZvZUxz"
+        pairs = (
+            ("Authorization: Basic admin:" + "S3cretPass", "S3cretPass"),
+            ("Authorization: Basic admin:" + "p@ss!w0rd" + "Long", "@ss!w0rdLong"),
+            ("Authorization: Basic " + letters, letters),
+            ("Authorization: Basic " + cred + " password=" + "hunter2hunter2",
+             cred, "hunter2hunter2"),
+        )
+        for line, *leaked in pairs:
+            with self.subTest(line=line[:40]):
+                content = self._captured(line)
+                for fragment in leaked:
+                    self.assertNotIn(fragment, content)
+                self.assertIn("[REDACTED]", content)
+        Recorder.posts.clear()
+        self.recall(prompt="why does Authorization: Basic " + cred + " get a 401")
+        self.assertNotIn(cred, self.searches()[0]["query"])
 
     def test_capture_redacts_bearer_tokens_with_base64_characters(self):
         # Opaque bearer tokens are often standard base64, with '+' and '/'.
