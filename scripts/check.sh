@@ -26,6 +26,19 @@ while IFS= read -r f; do
   fi
 done < <(find . -name '*.sh' -not -path './.git/*')
 
+if command -v shellcheck >/dev/null 2>&1; then
+  echo "→ shellcheck"
+  while IFS= read -r f; do
+    if shellcheck "$f"; then
+      echo "  ok   $f"
+    else
+      echo "  FAIL $f (shellcheck)"; fail=1
+    fi
+  done < <(git ls-files '*.sh')
+else
+  echo "→ shellcheck (skipped: shellcheck not on PATH)"
+fi
+
 echo "→ python modules"
 while IFS= read -r f; do
   if python3 -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' "$f" 2>/dev/null; then
@@ -150,7 +163,10 @@ else
 fi
 
 echo "→ hook behaviour tests"
-if python3 test/test_hooks.py >/tmp/kemory-tests.log 2>&1; then
+# GitHub Actions sets GITHUB_ACTIONS; its next step runs the suite with full output.
+if [ -n "${GITHUB_ACTIONS:-}" ]; then
+  echo "  skip run by the workflow's own step"
+elif python3 test/test_hooks.py >/tmp/kemory-tests.log 2>&1; then
   echo "  ok   $(grep -oE 'Ran [0-9]+ tests' /tmp/kemory-tests.log) passed"
 else
   echo "  FAIL hook tests — see /tmp/kemory-tests.log"; tail -20 /tmp/kemory-tests.log; fail=1

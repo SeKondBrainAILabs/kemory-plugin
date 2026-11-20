@@ -8,6 +8,8 @@ Run: python3 test/test_hooks.py
 import ast
 import base64
 import copy
+import fcntl
+import hashlib
 import http.server
 import json
 import os
@@ -329,6 +331,24 @@ class HookTest(LocalServerTest):
         return str(p)
 
     # --- capture ----------------------------------------------------------
+    def test_an_empty_marker_is_not_counted_as_a_captured_session(self):
+        args = {"session_id": "s1", "transcript_path": self.transcript("one turn")}
+        self.run_script("capture.sh", {**args, "hook_event_name": "Stop"},
+                        KEMORY_API_KEY="k")
+        marker = pathlib.Path(self.home) / ".kemory" / ".captured" / "s1"
+        self.assertTrue(marker.is_file())
+        self.assertEqual(marker.read_text(), "")
+
+        def status():
+            return run_with_timeout([str(SCRIPTS / "status.sh")], input="{}", text=True,
+                                    capture_output=True,
+                                    env=self.env(KEMORY_API_KEY="k")).stdout
+
+        self.assertNotIn("captured so far", status())
+        self.run_script("capture.sh", {**args, "hook_event_name": "SessionEnd",
+                                       "reason": "exit"}, KEMORY_API_KEY="k")
+        self.assertIn("1 session(s) captured so far", status())
+
     def test_capture_runs_by_default(self):
         self.run_script("capture.sh",
                         {"session_id": "s", "transcript_path": self.transcript("hi there")},
@@ -383,6 +403,28 @@ class HookTest(LocalServerTest):
                             KEMORY_API_KEY="k", KEMORY_AUTO_CAPTURE="1")
         self.assertEqual(len(Recorder.posts), 1,
                          "SessionEnd fires repeatedly; identical digests must upload once")
+
+    def test_capture_caps_posted_turn_text_at_8000_chars(self):
+        t = self.transcript("lorem ipsum " * 2000)
+        self.run_script("capture.sh", {"session_id": "s", "transcript_path": t},
+                        KEMORY_API_KEY="k", KEMORY_AUTO_CAPTURE="1")
+        self.assertEqual(len(Recorder.posts), 1)
+        _, body, _path = Recorder.posts[0]
+        turn_text = body["content"].split("\n\n")[-1]
+        self.assertEqual(len(turn_text), 8000)
+
+    def test_capture_skips_when_legacy_bare_sha_marker_matches_digest(self):
+        t = self.transcript("one task")
+        args = {"session_id": "s", "transcript_path": t}
+        self.run_script("capture.sh", args, KEMORY_API_KEY="k", KEMORY_AUTO_CAPTURE="1")
+        self.assertEqual(len(Recorder.posts), 1)
+        _, body, _path = Recorder.posts[0]
+        digest = hashlib.sha256(body["content"].encode()).hexdigest()
+        # Pre-0.2.0 marker: a bare sha256, no captured_turns high-water mark.
+        (pathlib.Path(self.home) / ".kemory" / ".captured" / "s").write_text(digest + "\n")
+        self.run_script("capture.sh", args, KEMORY_API_KEY="k", KEMORY_AUTO_CAPTURE="1")
+        self.assertEqual(len(Recorder.posts), 1,
+                         "a bare-sha marker equal to the next digest must not re-post")
 
     def test_capture_uploads_again_for_new_turns(self):
         t = self.transcript("one task")
@@ -784,6 +826,7 @@ class HookTest(LocalServerTest):
         "the secret key is stored in vault",
         "secret_keyboard=abcdefgh",
         "the private key is in ~/.ssh",
+        "bearer tokens expire after an hour",
         # Vendor key prefixes in ordinary identifiers and prose.
         "risk_test_validateEverythingHere",
         "export GITHUB_PAT_ROTATION_REMINDER_DAYS=30",
@@ -820,6 +863,32 @@ class HookTest(LocalServerTest):
         # A keyword assignment redacts from six value characters; five stay.
         self.assertIn("[REDACTED]", self._captured("password=abc123"))
         self.assertNotIn("[REDACTED]", self._captured("password=abc12"))
+
+    def test_capture_redacts_bearer_token_and_jwt(self):
+        # Neither value follows a keyword assignment, so only the bearer and
+        # eyJ patterns can catch them. Values are 20 to 30 characters per part.
+        bearer = "Zq8" + "Lm4Xv2" * 4 + "Rt"
+        jwt = "eyJ" + "hbGciOiJIUzI1NiJ9" + "." + "eyJzdWIiOiIxMjM0NTY3ODkw" + "." + "SflKxwRJSMeKKF2QT4fwpM"
+        for name, text, secret in (
+            ("bearer", f"curl -H 'Authorization: Bearer {bearer}' https://x.test", bearer),
+            ("jwt", f"the session cookie was {jwt} in the log", jwt),
+        ):
+            with self.subTest(kind=name):
+                content = self._captured(text)
+                self.assertNotIn(secret[-12:], content)
+                self.assertIn("[REDACTED]", content)
+
+    def test_prompt_recall_redacts_bearer_token_and_jwt(self):
+        bearer = "Zq8" + "Lm4Xv2" * 4 + "Rt"
+        jwt = "eyJ" + "hbGciOiJIUzI1NiJ9" + "." + "eyJzdWIiOiIxMjM0NTY3ODkw" + "." + "SflKxwRJSMeKKF2QT4fwpM"
+        for name, text, secret in (
+            ("bearer", f"401 with Authorization: Bearer {bearer}, what did we decide", bearer),
+            ("jwt", f"decode {jwt}, what did we decide", jwt),
+        ):
+            with self.subTest(kind=name):
+                Recorder.posts.clear()
+                self.recall(prompt=text)
+                self.assertNotIn(secret[-12:], self.searches()[0]["query"])
 
     # Anthropic and OpenAI project keys have dashes after "sk-". Built by
     # concatenation so no complete key-shaped literal sits in the repo.
@@ -1070,6 +1139,54 @@ class HookTest(LocalServerTest):
                     self.assertNotIn(line, content)
                 self.assertIn("done", content)
 
+    def test_capture_redacts_bearer_tokens_with_base64_characters(self):
+        # Opaque bearer tokens are often standard base64, with '+' and '/'.
+        token = "abc/DEF+ghi/JKL" + "mnopqrstuv=="
+        content = self._captured("Authorization: Bearer " + token)
+        self.assertNotIn("JKLmnopqrstuv", content)
+        self.assertIn("[REDACTED]", content)
+
+    # Each character of BEARER's class, early (index 2) and late (index 12) in a
+    # 22-character token.
+    BEARER_TOKENS = [
+        base[:p] + ch + base[p + 1:]
+        for base in ("Ab3dEf6hIj" + "KlMn0pQr5tUv",)
+        for ch in "+/~=-._"
+        for p in (2, 12)
+    ]
+
+    def test_capture_redacts_each_bearer_token_character(self):
+        for token in self.BEARER_TOKENS:
+            with self.subTest(token=token):
+                content = self._captured("Authorization: Bearer " + token)
+                self.assertNotIn(token[-10:], content)
+                self.assertIn("[REDACTED]", content)
+
+    def test_prompt_recall_redacts_bearer_tokens_with_base64_characters(self):
+        for token in self.BEARER_TOKENS + ["abc/DEF+ghi/JKL" + "mnopqrstuv=="]:
+            with self.subTest(token=token):
+                Recorder.posts.clear()
+                self.recall(prompt="Authorization: Bearer " + token
+                            + " returns 401, why")
+                self.assertNotIn(token[-10:], self.searches()[0]["query"])
+
+    def test_bearer_token_does_not_hide_the_secret_after_it(self):
+        # As measured: main redacts the first two cases in full, and the version
+        # of this fix that widens the bearer branch inside SECRET leaks
+        # ':cretvalue' and ':cdefghijkl', so those two guard against moving the
+        # rule into SECRET. The third leaks on main and inline both and is fixed
+        # only by the separate pattern.
+        cases = [
+            ("Bearer abcdefgh/" + "token=se:" + "cretvalue", "cretvalue"),
+            ("Bearer abcdefgh/" + "secret=ab:" + "cdefghijkl", "cdefghijkl"),
+            ("Bearer " + "password=" + "abc:defghi", "defghi"),
+        ]
+        for line, fragment in cases:
+            with self.subTest(line=line):
+                content = self._captured(line)
+                self.assertNotIn(fragment, content)
+                self.assertIn("[REDACTED]", content)
+
     def test_capture_redacts_quoted_passwords_with_punctuation_or_spaces(self):
         # Inside quotes, the closing quote ends the value; a comma, semicolon or
         # space inside it is part of the password.
@@ -1283,6 +1400,32 @@ class HookTest(LocalServerTest):
         r = self.run_script("rate-reminder.sh",
                             {"tool_response": {"retrieval": {"recall_id": "rc_only"}}})
         self.assertIn("rc_only", r.stdout)
+
+    def test_reminder_reads_a_json_string_tool_response(self):
+        payload = json.dumps({"memories": [1, 2], "retrieval": {"recall_id": "rc_str"}})
+        r = self.run_script("rate-reminder.sh", {"tool_response": payload})
+        ctx = json.loads(r.stdout)["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("2 memories", ctx)
+        self.assertIn("rc_str", ctx)
+
+    def test_reminder_silent_on_a_non_json_string_tool_response(self):
+        r = self.run_script("rate-reminder.sh", {"tool_response": "no recall here"})
+        self.assertEqual(r.stdout.strip(), "")
+
+    def test_reminder_skips_odd_blocks_to_reach_the_payload(self):
+        good = {"type": "text", "text": json.dumps(
+            {"memories": [1], "retrieval": {"recall_id": "rc_odd"}})}
+        blocks = ["not a block", {"type": "text", "text": "not json"},
+                  {"type": "image"}, good]
+        r = self.run_script("rate-reminder.sh", {"tool_response": blocks})
+        ctx = json.loads(r.stdout)["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("1 memory", ctx)
+        self.assertIn("rc_odd", ctx)
+
+    def test_reminder_silent_when_no_block_holds_a_payload(self):
+        r = self.run_script("rate-reminder.sh", {"tool_response": [
+            "not a block", {"type": "text", "text": "not json"}]})
+        self.assertEqual(r.stdout.strip(), "")
 
     def test_reminder_silent_for_non_recall_response(self):
         # A store/write response carries no recall_id and no result list.
@@ -2374,6 +2517,19 @@ class CredentialTest(LocalServerTest):
         self.assertEqual(len(Recorder.posts), 1, "the refresh must have run")
         self.assertIn("expired=1", out)
         self.assertEqual(creds.read_text(), before)
+
+    def test_rotated_refresh_token_is_written_back(self):
+        # With rotation on, the old refresh token is revoked by the exchange;
+        # dropping the new one makes the next refresh fail.
+        creds = self.write_creds()
+        Recorder.token_payload = {"access_token": "fresh-token",
+                                  "refresh_token": "rotated-refresh",
+                                  "expires_in": 3600}
+        out = self.resolve().stdout
+        self.assertIn("expired=0", out)
+        saved = json.loads(creds.read_text())
+        self.assertEqual(saved["refresh_token"], "rotated-refresh")
+        self.assertEqual(saved["access_token"], "fresh-token")
 
     def test_concurrent_refreshes_leave_valid_json(self):
         creds = self.write_creds()
@@ -3868,6 +4024,108 @@ class FixtureCoverage(unittest.TestCase):
                 for f in (ROOT / "test" / "fixtures").glob("*.json")}
         self.assertEqual(self.UNCAPTURED & have, set(),
                          "UNCAPTURED excuses an event that already has a fixture")
+
+
+class SlowSink(http.server.BaseHTTPRequestHandler):
+    posts = []
+
+    def do_POST(self):
+        n = int(self.headers.get("Content-Length", 0))
+        SlowSink.posts.append(json.loads(self.rfile.read(n) or b"{}"))
+        time.sleep(1.5)
+        self.send_response(201)
+        self.end_headers()
+        self.wfile.write(b"{}")
+
+    def log_message(self, *args):
+        pass
+
+
+class CaptureOverlapTest(LocalServerTest):
+    """Capture runs async, so runs for one session can overlap."""
+
+    handler = SlowSink
+
+    @classmethod
+    def setUpClass(cls):
+        cls.srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), cls.handler)
+        cls.port = cls.srv.server_address[1]
+        threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.srv.shutdown()
+        cls.srv.server_close()
+
+    def setUp(self):
+        super().setUp()
+        SlowSink.posts.clear()
+
+    def env(self):
+        e = clean_env(drop_entrypoint=True)
+        e.update({"HOME": self.home, "KEMORY_URL": f"http://127.0.0.1:{self.port}",
+                  "KEMORY_API_KEY": "k"})
+        return e
+
+    def transcript(self, *messages):
+        p = pathlib.Path(self.home) / ("t%d.jsonl" % len(list(pathlib.Path(self.home).glob("t*.jsonl"))))
+        p.write_text("".join(
+            json.dumps({"type": "user", "message": {"content": m}}) + "\n"
+            for m in messages))
+        return str(p)
+
+    def start(self, event, transcript):
+        p = subprocess.Popen([str(SCRIPTS / "capture.sh")], stdin=subprocess.PIPE,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                             text=True, env=self.env())
+        p.stdin.write(json.dumps({"session_id": "s1", "hook_event_name": event,
+                                  "reason": "exit", "transcript_path": transcript}))
+        p.stdin.close()
+        return p
+
+    def test_overlapping_stop_and_session_end_store_turns_once(self):
+        t = self.transcript("add retries", "make them exponential", "cap at five")
+        procs = [self.start("Stop", t), self.start("SessionEnd", t)]
+        for p in procs:
+            p.wait(timeout=60)
+        self.assertEqual(len(SlowSink.posts), 1,
+                         "the same three turns were stored %d times" % len(SlowSink.posts))
+
+    def test_a_run_that_waited_posts_only_turns_the_first_did_not_store(self):
+        first = self.start("Stop", self.transcript("add retries", "make them exponential",
+                                                   "cap at five"))
+        deadline = time.monotonic() + 10
+        while not SlowSink.posts and time.monotonic() < deadline:
+            time.sleep(0.05)
+        second = self.start("SessionEnd", self.transcript(
+            "add retries", "make them exponential", "cap at five", "and log each retry"))
+        for p in (first, second):
+            p.wait(timeout=60)
+        self.assertEqual(len(SlowSink.posts), 2)
+        later = SlowSink.posts[1]
+        self.assertEqual(later["metadata"]["turns"], 1)
+        self.assertIn("and log each retry", later["content"])
+        self.assertNotIn("add retries", later["content"])
+
+    def test_a_run_that_cannot_get_the_lock_gives_up_without_posting(self):
+        marker = pathlib.Path(self.home) / ".kemory" / ".captured" / "s1"
+        marker.parent.mkdir(parents=True)
+        marker.write_text(json.dumps({"digest": "d", "captured_turns": 1}))
+        before = marker.read_bytes()
+        fd = os.open(marker, os.O_RDWR)
+        self.addCleanup(os.close, fd)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        t = self.transcript("add retries", "make them exponential", "cap at five")
+        started = time.monotonic()
+        r = run_with_timeout([str(SCRIPTS / "capture.sh")], text=True, env=self.env(),
+                             capture_output=True,
+                             input=json.dumps({"session_id": "s1",
+                                               "hook_event_name": "SessionEnd",
+                                               "reason": "exit", "transcript_path": t}))
+        self.assertEqual(r.returncode, 0)
+        self.assertLess(time.monotonic() - started, 9)
+        self.assertEqual(SlowSink.posts, [])
+        self.assertEqual(marker.read_bytes(), before)
 
 
 class MuseTranscriptTest(LocalServerTest):

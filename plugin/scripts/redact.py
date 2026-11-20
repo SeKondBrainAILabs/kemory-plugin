@@ -21,8 +21,7 @@ import re
 # PRIVATE_KEY, ACCESS_KEY and ACCOUNT_KEY (an Azure AccountKey=). `secret` alone
 # still needs the assignment, so "the secret key is stored in vault" is prose.
 SECRET = re.compile(
-    r'(?i)(bearer\s+[\w\-\.]{8,}'
-    r'|(?:api[_-]?key|api[_-]?token|access[_-]?token|auth[_-]?token|token'
+    r'(?i)((?:api[_-]?key|api[_-]?token|access[_-]?token|auth[_-]?token|token'
     r'|secret[a-z0-9_-]{0,24}?key|private[_-]?key|access[_-]?key|account[_-]?key'
     r'|secret|password|passwd|pwd)\\?["\']?\s*[:=]\s*\\?'
     r'(?:"[^"\n]{6,256}"|\'[^\'\n]{6,256}\'|["\']?[^\s"\',;}]{6,})'
@@ -30,6 +29,16 @@ SECRET = re.compile(
     r'|AKIA[0-9A-Z]{16}|xox[baprs]-[A-Za-z0-9-]{10,}'
     r'|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})'
 )
+
+# A bearer token, in the RFC 6750 alphabet: word characters, '.', '~', '+', '/',
+# '-' and '=' padding (standard base64 has '+', '/' and '='). This is its own
+# pattern, unioned in redact(), and not a branch of SECRET: with '/' and '=' in
+# its class, a branch starting at "Bearer" wins the leftmost match, stops at a
+# ':' inside a later value and leaks the rest ('Bearer abcdefgh/token=se:cretvalue'
+# became '[REDACTED]:cretvalue'). The class is one run after a fixed literal, so
+# the scan is linear and the {8,} stays unbounded: a cap would leak the tail of a
+# longer token.
+BEARER = re.compile(r'(?i)bearer\s+[\w.~+/=-]{8,}')
 
 # A private key is secret in its body, not its header, so this takes the whole
 # block, BEGIN line to END line (PEM, OpenSSH and PGP). It runs as its own pass
@@ -149,7 +158,7 @@ def redact(text: str) -> str:
     """Replace credential-shaped substrings with a placeholder."""
     # Private-key blocks go first, as their own passes: PEM-style blocks (see
     # KEY), then PuTTY .ppk bodies (see _redact_ppk). Then the union of the
-    # matches of SECRET, SK_DASHED and the four vendor key patterns, and
+    # matches of SECRET, BEARER, SK_DASHED and the four vendor key patterns, and
     # URL_PASSWORD's password group. When only SECRET matches, this equals
     # SECRET.sub(PLACEHOLDER, _redact_ppk(KEY.sub(PLACEHOLDER, text))).
     text = _redact_ppk(KEY.sub(PLACEHOLDER, text))
@@ -157,7 +166,8 @@ def redact(text: str) -> str:
         [
             m.span()
             for pattern in (
-                SECRET, SK_DASHED, GITHUB_PAT, STRIPE_KEY, GOOGLE_API_KEY, GITLAB_PAT,
+                SECRET, BEARER, SK_DASHED, GITHUB_PAT, STRIPE_KEY, GOOGLE_API_KEY,
+                GITLAB_PAT,
             )
             for m in pattern.finditer(text)
         ]
