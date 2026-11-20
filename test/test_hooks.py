@@ -8,6 +8,7 @@ Run: python3 test/test_hooks.py
 import ast
 import base64
 import copy
+import fcntl
 import hashlib
 import http.server
 import json
@@ -330,6 +331,24 @@ class HookTest(LocalServerTest):
         return str(p)
 
     # --- capture ----------------------------------------------------------
+    def test_an_empty_marker_is_not_counted_as_a_captured_session(self):
+        args = {"session_id": "s1", "transcript_path": self.transcript("one turn")}
+        self.run_script("capture.sh", {**args, "hook_event_name": "Stop"},
+                        KEMORY_API_KEY="k")
+        marker = pathlib.Path(self.home) / ".kemory" / ".captured" / "s1"
+        self.assertTrue(marker.is_file())
+        self.assertEqual(marker.read_text(), "")
+
+        def status():
+            return run_with_timeout([str(SCRIPTS / "status.sh")], input="{}", text=True,
+                                    capture_output=True,
+                                    env=self.env(KEMORY_API_KEY="k")).stdout
+
+        self.assertNotIn("captured so far", status())
+        self.run_script("capture.sh", {**args, "hook_event_name": "SessionEnd",
+                                       "reason": "exit"}, KEMORY_API_KEY="k")
+        self.assertIn("1 session(s) captured so far", status())
+
     def test_capture_runs_by_default(self):
         self.run_script("capture.sh",
                         {"session_id": "s", "transcript_path": self.transcript("hi there")},
@@ -806,7 +825,15 @@ class HookTest(LocalServerTest):
         "http://localhost:3000?email=a@b.com",
         "the secret key is stored in vault",
         "secret_keyboard=abcdefgh",
+        # Upper-case suffixed names that are counts and limits, not secrets.
+        "token_count: 123456",
+        "TOKEN_COUNT=123456",
+        "TOKEN2_COUNT=123456",
+        "MAX_TOKEN_LIMIT=4096000",
+        "SECRET_ROTATION_DAYS=90",
+        "PASSWORD_MIN_LENGTH=12",
         "the private key is in ~/.ssh",
+        "bearer tokens expire after an hour",
         # Vendor key prefixes in ordinary identifiers and prose.
         "risk_test_validateEverythingHere",
         "export GITHUB_PAT_ROTATION_REMINDER_DAYS=30",
@@ -814,6 +841,20 @@ class HookTest(LocalServerTest):
         "the Stripe sk_live_ key goes in the vault",
         "task_test_" + "abcdefghijklmnopqrstuvwxyz",
         "RK_LIVE_" + "RESTRICTEDKEYFORWEBHOOKS",
+        # Basic auth in ordinary sentences and code that holds no credential.
+        "use Basic auth over HTTPS only",
+        "the basic authorization flow is deprecated",
+        "Authorization: Basic or Bearer?",
+        "Authorization: Basic $CREDS",
+        "authentication, authorization, basic accounting",
+        "Authorization: Basic\nSomething happened here",
+        "Authorization: Basic <credentials>",
+        'headers={"Authorization": f"Basic {token}"}',
+        'req.Header.Set("Authorization", "Basic "+creds)',
+        "The Authorization: Basic header contains the user",
+        "Authorization: Basic authentication is weak",
+        "Authorization: Basic Authentication is weak",
+        "Authorization: Basic YOUR_CREDENTIALS_HERE",
     ]
 
     def _captured(self, line):
@@ -1034,6 +1075,87 @@ class HookTest(LocalServerTest):
         self.assertLess(elapsed, 5, f"recall took {elapsed:.1f}s")
         self.assertTrue(self.searches(), "the hook never reached the search")
 
+    def test_prompt_recall_auth_basic_pattern_is_bounded(self):
+        # Prompts shaped to make the Authorization: Basic pattern rescan: runs of
+        # separators, a bare 'basic', one very long gap and credential-sized
+        # words that only the second lookahead branch accepts. The synchronous
+        # recall hook has a 10 s timeout.
+        prompts = [
+            ("authorization:" + " " * 40) * 2000,
+            ("authorization: basic" + " " * 40) * 2000,
+            "why does authorization:" + " " * 50000 + "x fail",
+            ("Authorization: Basic " + "A" * 255 + "a" * 256 + " ") * 230,
+        ]
+        for prompt in prompts:
+            with self.subTest(prompt=prompt[:30], length=len(prompt)):
+                Recorder.posts.clear()
+                start = time.monotonic()
+                self.recall(prompt=prompt)
+                elapsed = time.monotonic() - start
+                self.assertLess(elapsed, 5, f"recall took {elapsed:.1f}s")
+                self.assertTrue(self.searches(), "the hook never reached the search")
+
+    # An upper-case keyword followed by a suffix before the separator.
+    SUFFIXED_NAMES = [
+        ("SECRET_KEY_BASE=" + "a1b2c3a1b2c3a1b2c3", "a1b2c3a1b2c3a1b2c3"),
+        ("export GITHUB_TOKEN_RO=" + "ghxabc123abc123abc123", "ghxabc123abc123abc123"),
+        ("DB_PASSWORD_PROD=" + "hunter2hunter2", "hunter2hunter2"),
+        ("DB_PASSWORD_PROD=" + "correcthorsebattery", "correcthorsebattery"),
+        ("DB_PASSWORD_PROD=" + "12345678", "12345678"),
+        ("GITHUB_TOKEN_READ_ONLY_FOR_CI=" + "abcdef123456", "abcdef123456"),
+        ("STRIPE_API_KEY_LIVE_EU_WEST_1=" + "abcdef123456", "abcdef123456"),
+        ("DB_PASSWORD2_PROD=" + "abcdef123456", "abcdef123456"),
+        ("JWT_SECRET_SIGNING_KEY_X=" + "abcdef123456", "abcdef123456"),
+        ('DB_PASSWORD_PROD: "' + 'longpassword"', "longpassword"),
+        ('{"DB_PASSWORD_PROD":"' + 'longpassword"}', "longpassword"),
+        ('{\\"DB_PASSWORD_PROD\\":\\"' + 'longpassword\\"}', "longpassword"),
+    ]
+
+    def test_capture_suffixed_name_does_not_hide_the_assignment_after_it(self):
+        content = self._captured("API_TOKEN_V2=" + "abcdef123456 password=" + "hunter22x")
+        self.assertNotIn("abcdef123456", content)
+        self.assertNotIn("hunter22x", content)
+
+    def test_capture_redacts_keyword_suffix_names(self):
+        for line, value in self.SUFFIXED_NAMES:
+            with self.subTest(line=line):
+                content = self._captured(line)
+                self.assertNotIn(value, content)
+                self.assertIn("[REDACTED]", content)
+
+    SUFFIXED_KEYWORDS = [
+        "API_KEY_X", "APIKEY_X", "API_TOKEN_X", "ACCESS_TOKEN_X", "AUTH_TOKEN_X",
+        "TOKEN_X", "SECRET_X", "PRIVATE_KEY_X", "ACCESS_KEY_X", "ACCOUNT_KEY_X",
+        "PASSWORD_X", "PASSWD_X", "PWD_X", "PASSWORD2", "TOKEN_A_B_C_D_E_F",
+    ]
+
+    def test_capture_redacts_every_suffixed_keyword(self):
+        # Exact output: with only TOKEN kept, API_TOKEN_X= would leave API_[REDACTED].
+        for name in self.SUFFIXED_KEYWORDS:
+            with self.subTest(name=name):
+                lines = self._captured(name + "=valueabc123").strip().splitlines()
+                self.assertEqual(lines[-1], "- [REDACTED]")
+
+    def test_prompt_recall_redacts_keyword_suffix_names(self):
+        for line, value in self.SUFFIXED_NAMES[:3]:
+            with self.subTest(line=line):
+                Recorder.posts.clear()
+                self.recall(prompt=f"why does {line} fail")
+                self.assertNotIn(value, self.searches()[0]["query"])
+
+    def test_prompt_recall_suffix_pattern_is_bounded(self):
+        # The hook payload travels in one environment variable, which Linux caps
+        # at 128 KiB, so the longer units repeat fewer times (about 100-120 KB).
+        for unit, count in (("TOKEN_", 20000), ("PASSWORD_", 12000),
+                            ("PASSWORD2_", 10000)):
+            with self.subTest(unit=unit):
+                Recorder.posts.clear()
+                start = time.monotonic()
+                self.recall(prompt=unit * count, session=unit)
+                elapsed = time.monotonic() - start
+                self.assertLess(elapsed, 5, f"recall took {elapsed:.1f}s")
+                self.assertTrue(self.searches(), "the hook never reached the search")
+
     # A dashed sk- name followed by a secret the keyword, JWT or PEM patterns
     # catch: the name must not hide that secret. Built by concatenation.
     SK_NAME_THEN_SECRET = [
@@ -1119,6 +1241,99 @@ class HookTest(LocalServerTest):
                     self.assertNotIn(line, content)
                 self.assertIn("done", content)
 
+    def test_capture_redacts_basic_auth_credentials(self):
+        # Basic auth is base64 of user:password, so the header value is the
+        # password. Built by concatenation so no full credential sits in the repo.
+        cred = "YWRtaW46UzNjcmV0" + "UGFzc3cwcmQ="
+        lines = (
+            "Authorization: Basic " + cred,
+            "curl -H 'Authorization: Basic " + cred + "' https://api.example.com",
+            '{"Authorization": "Basic ' + cred + '"}',
+            # JSON-escaped: a literal backslash before each quote.
+            '{\\"Authorization\\": \\"Basic ' + cred + '\\"}',
+            'conn.setRequestProperty("Authorization", "Basic ' + cred + '")',
+            "Proxy-Authorization: Basic " + cred,
+            'proxy_set_header Authorization "Basic ' + cred + '";',
+            "{'Authorization' => 'Basic " + cred + "'}",
+            "headers['Authorization'] = 'Basic " + cred + "'",
+            "HTTP_AUTHORIZATION=Basic " + cred,
+            "request.META['HTTP_AUTHORIZATION'] = 'Basic " + cred + "'",
+        )
+        for line in lines:
+            with self.subTest(line=line[:40]):
+                content = self._captured(line)
+                self.assertNotIn(cred, content)
+                self.assertIn("[REDACTED]", content)
+                # Only the credential goes: the header name and scheme stay.
+                if line == lines[0]:
+                    self.assertIn("Authorization: Basic [REDACTED]", content)
+        # Base64 with no digit, '+', '/' or padding: only its mixed case marks it.
+        letters = "YnhveTpR" + "VkhzSXZvZUxz"
+        pairs = (
+            ("Authorization: Basic admin:" + "S3cretPass", "S3cretPass"),
+            ("Authorization: Basic admin:" + "p@ss!w0rd" + "Long", "@ss!w0rdLong"),
+            ("Authorization: Basic " + letters, letters),
+            ("Authorization: Basic " + cred + " password=" + "hunter2hunter2",
+             cred, "hunter2hunter2"),
+        )
+        for line, *leaked in pairs:
+            with self.subTest(line=line[:40]):
+                content = self._captured(line)
+                for fragment in leaked:
+                    self.assertNotIn(fragment, content)
+                self.assertIn("[REDACTED]", content)
+        Recorder.posts.clear()
+        self.recall(prompt="why does Authorization: Basic " + cred + " get a 401")
+        self.assertNotIn(cred, self.searches()[0]["query"])
+
+    def test_capture_redacts_bearer_tokens_with_base64_characters(self):
+        # Opaque bearer tokens are often standard base64, with '+' and '/'.
+        token = "abc/DEF+ghi/JKL" + "mnopqrstuv=="
+        content = self._captured("Authorization: Bearer " + token)
+        self.assertNotIn("JKLmnopqrstuv", content)
+        self.assertIn("[REDACTED]", content)
+
+    # Each character of BEARER's class, early (index 2) and late (index 12) in a
+    # 22-character token.
+    BEARER_TOKENS = [
+        base[:p] + ch + base[p + 1:]
+        for base in ("Ab3dEf6hIj" + "KlMn0pQr5tUv",)
+        for ch in "+/~=-._"
+        for p in (2, 12)
+    ]
+
+    def test_capture_redacts_each_bearer_token_character(self):
+        for token in self.BEARER_TOKENS:
+            with self.subTest(token=token):
+                content = self._captured("Authorization: Bearer " + token)
+                self.assertNotIn(token[-10:], content)
+                self.assertIn("[REDACTED]", content)
+
+    def test_prompt_recall_redacts_bearer_tokens_with_base64_characters(self):
+        for token in self.BEARER_TOKENS + ["abc/DEF+ghi/JKL" + "mnopqrstuv=="]:
+            with self.subTest(token=token):
+                Recorder.posts.clear()
+                self.recall(prompt="Authorization: Bearer " + token
+                            + " returns 401, why")
+                self.assertNotIn(token[-10:], self.searches()[0]["query"])
+
+    def test_bearer_token_does_not_hide_the_secret_after_it(self):
+        # As measured: main redacts the first two cases in full, and the version
+        # of this fix that widens the bearer branch inside SECRET leaks
+        # ':cretvalue' and ':cdefghijkl', so those two guard against moving the
+        # rule into SECRET. The third leaks on main and inline both and is fixed
+        # only by the separate pattern.
+        cases = [
+            ("Bearer abcdefgh/" + "token=se:" + "cretvalue", "cretvalue"),
+            ("Bearer abcdefgh/" + "secret=ab:" + "cdefghijkl", "cdefghijkl"),
+            ("Bearer " + "password=" + "abc:defghi", "defghi"),
+        ]
+        for line, fragment in cases:
+            with self.subTest(line=line):
+                content = self._captured(line)
+                self.assertNotIn(fragment, content)
+                self.assertIn("[REDACTED]", content)
+
     def test_capture_redacts_quoted_passwords_with_punctuation_or_spaces(self):
         # Inside quotes, the closing quote ends the value; a comma, semicolon or
         # space inside it is part of the password.
@@ -1180,6 +1395,99 @@ class HookTest(LocalServerTest):
         content = self._captured(f"{block}\nwhat is wrong?")
         self.assertNotIn(short, content)
         self.assertIn("what is wrong?", content)
+
+    # Fake PuTTY key material only: the repo is public.
+    PPK_PUBLIC = "AAAAB3NzaC1yc2EAAAADAQAB"
+    PPK_LINE = "AAAAgQC" + "q" * 57
+    PPK_LAST = "Zz9Yy8Xx"
+
+    def _ppk(self, version="3", encrypted=False, mac=True, eol="\n", prefix=""):
+        lines = [
+            f"PuTTY-User-Key-File-{version}: ssh-rsa",
+            "Encryption: aes256-cbc" if encrypted else "Encryption: none",
+            "Comment: k",
+            "Public-Lines: 1",
+            self.PPK_PUBLIC,
+        ]
+        if encrypted:
+            lines += ["Key-Derivation: Argon2id", "Argon2-Memory: 8192",
+                      "Argon2-Passes: 13", "Argon2-Parallelism: 1",
+                      "Argon2-Salt: " + "ab" * 16]
+        lines += ["Private-Lines: 3", self.PPK_LINE, self.PPK_LINE, self.PPK_LAST]
+        if mac:
+            lines.append("Private-MAC: " + "0" * (64 if version == "3" else 40))
+        return eol.join(prefix + line for line in lines)
+
+    def test_capture_redacts_a_putty_private_key(self):
+        # PuTTY .ppk keys have no BEGIN line; the secret is the Private-Lines body.
+        body = "AAAAgQC" + "q" * 57
+        ppk = ("PuTTY-User-Key-File-3: ssh-rsa\nEncryption: none\nComment: k\n"
+               "Public-Lines: 1\nAAAAB3NzaC1yc2EAAAADAQAB\nPrivate-Lines: 2\n"
+               f"{body}\n{body}\nPrivate-MAC: " + "0" * 64)
+        content = self._captured(f"why does this key fail: {ppk}")
+        self.assertNotIn(body, content)
+
+    def test_capture_redacts_every_putty_key_version(self):
+        cases = {
+            "v3": (self._ppk() + " thanks", " thanks"),
+            "v3 encrypted": (self._ppk(encrypted=True) + " thanks", " thanks"),
+            "v2": (self._ppk(version="2") + " thanks", " thanks"),
+            "v3 truncated": (self._ppk(mac=False) + "\nwhat is wrong?",
+                             "what is wrong?"),
+        }
+        for name, (fixture, tail) in cases.items():
+            with self.subTest(version=name):
+                content = self._captured("help: " + fixture)
+                self.assertNotIn(self.PPK_LINE, content)
+                self.assertNotIn(self.PPK_LAST, content)
+                self.assertIn(self.PPK_PUBLIC, content)
+                self.assertEqual(content.count("[REDACTED]"), 1)
+                self.assertIn(tail, content)
+                if name == "v3 encrypted":
+                    self.assertIn("Argon2-Salt: ", content)
+
+    PPK_PREFIXES = ["", "  ", " " * 8, " " * 40, "\t", "> ", "# ", "// ", "- ",
+                    "* ", " * ", "| ", "    | ", ";; ", "-- ", "% ", "1: "]
+    # LF, CRLF, single-escaped (JSON in a prompt) and double-escaped (JSON in
+    # JSON) \n and \r\n.
+    PPK_EOLS = ["\n", "\r\n", "\\n", "\\r\\n", "\\\\n", "\\\\r\\\\n"]
+
+    def test_capture_redacts_putty_keys_under_any_line_prefix(self):
+        # The pass counts lines from the Private-Lines header, so what a paste
+        # puts in front of each line (indent, quote, list or comment marker, line
+        # number) cannot hide the body.
+        for eol in self.PPK_EOLS:
+            for mac in (True, False):
+                with self.subTest(eol=eol, mac=mac):
+                    keys = []
+                    for p in self.PPK_PREFIXES:
+                        tail = " thanks" if mac else eol + p + "what is wrong?"
+                        keys.append(self._ppk(eol=eol, prefix=p, mac=mac) + tail)
+                    content = self._captured("help: " + eol.join(keys))
+                    self.assertNotIn(self.PPK_LINE, content)
+                    self.assertNotIn(self.PPK_LAST, content)
+                    n = len(self.PPK_PREFIXES)
+                    self.assertEqual(content.count(self.PPK_PUBLIC), n)
+                    self.assertEqual(content.count("[REDACTED]"), n)
+                    self.assertEqual(
+                        content.count(" thanks" if mac else "what is wrong?"), n)
+
+    def test_putty_count_overreach_is_bounded(self):
+        # The pass takes the header's N lines whatever they hold, so prose that
+        # says 'Private-Lines: N' and a paste cut off mid-body lose more than the
+        # key. It over-redacts these on purpose rather than leak a body.
+        with self.subTest(case="prose"):
+            content = self._captured(
+                "set Private-Lines: 2 in the header\nnext line\nthird\nfourth line")
+            self.assertIn("fourth line", content)
+            self.assertNotIn("next line", content)
+            self.assertNotIn("third", content)
+        with self.subTest(case="cut off"):
+            content = self._captured(
+                "help: Private-Lines: 3\n" + self.PPK_LINE
+                + "\nwhat is wrong?\nmore\nkeep this")
+            self.assertNotIn(self.PPK_LINE, content)
+            self.assertIn("keep this", content)
 
     # --- rate reminder ----------------------------------------------------
     def test_reminder_silent_on_empty_recall(self):
@@ -1625,6 +1933,34 @@ class HookTest(LocalServerTest):
         self.assertIn("[REDACTED]", query)
         for line in self.KEY_BODY:
             self.assertNotIn(line, query)
+
+    def test_prompt_recall_redacts_a_putty_private_key(self):
+        self.recall(prompt="why does this key fail: " + self._ppk())
+        query = self.searches()[0]["query"]
+        self.assertIn("[REDACTED]", query)
+        self.assertNotIn(self.PPK_LINE, query)
+        self.assertNotIn(self.PPK_LAST, query)
+
+    def test_putty_redaction_is_bounded(self):
+        # The synchronous recall hook has a 10 s timeout. These are the shapes a
+        # header-driven pass could be slow on: many headers back to back, one
+        # header with a huge count and no line break, and a long body repeated.
+        # Each payload must stay under 128 KB: prompt-recall.sh exports it as
+        # HOOK_INPUT and exec refuses a larger environment string, so the hook
+        # would fail open and send no search.
+        prompts = {
+            "many headers": "Private-Lines: 1\n" * 6000,
+            "no line break": "Private-Lines: 999 " * 6000,
+            "long body twice": ("Private-Lines: 1\n" + ("A" * 64 + "\n") * 600) * 2,
+        }
+        for name, prompt in prompts.items():
+            with self.subTest(shape=name):
+                Recorder.posts.clear()
+                start = time.monotonic()
+                self.recall(prompt=prompt)
+                elapsed = time.monotonic() - start
+                self.assertLess(elapsed, 5, f"recall took {elapsed:.1f}s")
+                self.assertTrue(self.searches(), "the hook never reached the search")
 
     def test_prompt_recall_silent_on_short_prompt(self):
         self.assertEqual(self.recall(prompt="ok").stdout.strip(), "")
@@ -3851,6 +4187,108 @@ class FixtureCoverage(unittest.TestCase):
                 for f in (ROOT / "test" / "fixtures").glob("*.json")}
         self.assertEqual(self.UNCAPTURED & have, set(),
                          "UNCAPTURED excuses an event that already has a fixture")
+
+
+class SlowSink(http.server.BaseHTTPRequestHandler):
+    posts = []
+
+    def do_POST(self):
+        n = int(self.headers.get("Content-Length", 0))
+        SlowSink.posts.append(json.loads(self.rfile.read(n) or b"{}"))
+        time.sleep(1.5)
+        self.send_response(201)
+        self.end_headers()
+        self.wfile.write(b"{}")
+
+    def log_message(self, *args):
+        pass
+
+
+class CaptureOverlapTest(LocalServerTest):
+    """Capture runs async, so runs for one session can overlap."""
+
+    handler = SlowSink
+
+    @classmethod
+    def setUpClass(cls):
+        cls.srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), cls.handler)
+        cls.port = cls.srv.server_address[1]
+        threading.Thread(target=cls.srv.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.srv.shutdown()
+        cls.srv.server_close()
+
+    def setUp(self):
+        super().setUp()
+        SlowSink.posts.clear()
+
+    def env(self):
+        e = clean_env(drop_entrypoint=True)
+        e.update({"HOME": self.home, "KEMORY_URL": f"http://127.0.0.1:{self.port}",
+                  "KEMORY_API_KEY": "k"})
+        return e
+
+    def transcript(self, *messages):
+        p = pathlib.Path(self.home) / ("t%d.jsonl" % len(list(pathlib.Path(self.home).glob("t*.jsonl"))))
+        p.write_text("".join(
+            json.dumps({"type": "user", "message": {"content": m}}) + "\n"
+            for m in messages))
+        return str(p)
+
+    def start(self, event, transcript):
+        p = subprocess.Popen([str(SCRIPTS / "capture.sh")], stdin=subprocess.PIPE,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                             text=True, env=self.env())
+        p.stdin.write(json.dumps({"session_id": "s1", "hook_event_name": event,
+                                  "reason": "exit", "transcript_path": transcript}))
+        p.stdin.close()
+        return p
+
+    def test_overlapping_stop_and_session_end_store_turns_once(self):
+        t = self.transcript("add retries", "make them exponential", "cap at five")
+        procs = [self.start("Stop", t), self.start("SessionEnd", t)]
+        for p in procs:
+            p.wait(timeout=60)
+        self.assertEqual(len(SlowSink.posts), 1,
+                         "the same three turns were stored %d times" % len(SlowSink.posts))
+
+    def test_a_run_that_waited_posts_only_turns_the_first_did_not_store(self):
+        first = self.start("Stop", self.transcript("add retries", "make them exponential",
+                                                   "cap at five"))
+        deadline = time.monotonic() + 10
+        while not SlowSink.posts and time.monotonic() < deadline:
+            time.sleep(0.05)
+        second = self.start("SessionEnd", self.transcript(
+            "add retries", "make them exponential", "cap at five", "and log each retry"))
+        for p in (first, second):
+            p.wait(timeout=60)
+        self.assertEqual(len(SlowSink.posts), 2)
+        later = SlowSink.posts[1]
+        self.assertEqual(later["metadata"]["turns"], 1)
+        self.assertIn("and log each retry", later["content"])
+        self.assertNotIn("add retries", later["content"])
+
+    def test_a_run_that_cannot_get_the_lock_gives_up_without_posting(self):
+        marker = pathlib.Path(self.home) / ".kemory" / ".captured" / "s1"
+        marker.parent.mkdir(parents=True)
+        marker.write_text(json.dumps({"digest": "d", "captured_turns": 1}))
+        before = marker.read_bytes()
+        fd = os.open(marker, os.O_RDWR)
+        self.addCleanup(os.close, fd)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        t = self.transcript("add retries", "make them exponential", "cap at five")
+        started = time.monotonic()
+        r = run_with_timeout([str(SCRIPTS / "capture.sh")], text=True, env=self.env(),
+                             capture_output=True,
+                             input=json.dumps({"session_id": "s1",
+                                               "hook_event_name": "SessionEnd",
+                                               "reason": "exit", "transcript_path": t}))
+        self.assertEqual(r.returncode, 0)
+        self.assertLess(time.monotonic() - started, 9)
+        self.assertEqual(SlowSink.posts, [])
+        self.assertEqual(marker.read_bytes(), before)
 
 
 class MuseTranscriptTest(LocalServerTest):
