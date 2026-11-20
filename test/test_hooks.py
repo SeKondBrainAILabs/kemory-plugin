@@ -3402,7 +3402,9 @@ class StaleVersionNoticeTest(LocalServerTest):
     def test_throttled_to_once_a_day(self):
         self.marketplace("99.0.0")
         self.assertIn("available", self.message(self.run_session_start()))
-        self.assertNotIn("available", self.message(self.run_session_start()),
+        second = self.run_session_start()
+        self.assertEqual(second.returncode, 0, second.stderr)
+        self.assertNotIn("available", self.message(second),
                          "a notice every session is nagging, not informing")
 
     def test_quiet_flag_silences_it(self):
@@ -5729,6 +5731,37 @@ class SubprocessTimeoutTest(unittest.TestCase):
             with self.assertRaises(subprocess.TimeoutExpired):
                 run_with_timeout([str(script)], capture_output=True)
         self.assertLess(time.monotonic() - start, 10)
+
+
+class HintStampExpiryTest(unittest.TestCase):
+    """A once-a-day hint stamp must expire, and reading it must not crash the hook."""
+
+    def setUp(self):
+        self.home = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.home, ignore_errors=True)
+
+    def run_session_start(self):
+        e = clean_env(drop_entrypoint=True)
+        e.update({"HOME": self.home, "KEMORY_URL": "http://127.0.0.1:1"})
+        return run_with_timeout([str(SCRIPTS / "session-start.sh")], input="{}",
+                                text=True, capture_output=True, env=e)
+
+    def test_setup_hint_returns_after_its_stamp_is_a_day_old(self):
+        first = self.run_session_start()
+        self.assertIn("no credential", json.loads(first.stdout)["systemMessage"])
+        stamp = pathlib.Path(self.home) / ".kemory" / ".setup-hint"
+        old = time.time() - 2 * 86400
+        os.utime(stamp, (old, old))
+        second = self.run_session_start()
+        self.assertEqual(second.returncode, 0, second.stderr)
+        self.assertIn("no credential", json.loads(second.stdout or "{}").get("systemMessage", ""))
+
+    def test_second_run_inside_the_window_exits_zero_and_stays_quiet(self):
+        self.run_session_start()
+        second = self.run_session_start()
+        self.assertEqual(second.returncode, 0, second.stderr)
+        self.assertNotIn("unbound variable", second.stderr)
+        self.assertNotIn("no credential", second.stdout)
 
 
 if __name__ == "__main__":
