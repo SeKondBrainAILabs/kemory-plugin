@@ -92,6 +92,30 @@ GOOGLE_API_KEY = re.compile(r'AIza[0-9A-Za-z_-]{35}')
 # A GitLab personal access token. Other GitLab token prefixes are not covered.
 GITLAB_PAT = re.compile(r'glpat-[A-Za-z0-9_.-]{20,}')
 
+# An upper-case env-style name with a keyword and then a suffix: SECRET_KEY_BASE=,
+# GITHUB_TOKEN_RO=, DB_PASSWORD_PROD=, PASSWORD2=. SECRET needs the keyword
+# right before the separator, so a suffix let the value through. This is its own
+# pattern, unioned in redact(), not a branch of SECRET, which is
+# case-insensitive and would also take config such as token_count: 123456.
+#
+# It is case-sensitive because of the env-var convention: lower-case suffixed
+# names (token_count, db_password_prod) are config or prose and are not matched.
+# Only TOKEN names skip a value of digits alone (counts and limits such as
+# TOKEN_COUNT=123456); password, secret and key names do not, so
+# DB_PASSWORD_PROD=12345678 is redacted, and so is SECRET_TOKEN_COUNT=123456,
+# by its SECRET keyword. Names with more than 6 suffix parts are not matched:
+# every quantifier is capped so the synchronous prompt-recall hook stays fast.
+# The separator and value tail are SECRET's.
+_SUFFIX = r'(?:[0-9]{1,4}(?:_[A-Z0-9]{1,16}){0,6}|(?:_[A-Z0-9]{1,16}){1,6})'
+_SEP = r'\\?["\']?\s*[:=]\s*\\?'
+_VALUE = r'(?:"[^"\n]{6,256}"|\'[^\'\n]{6,256}\'|["\']?[^\s"\',;}]{6,})'
+SUFFIXED = re.compile(
+    r'(?:API_?TOKEN|ACCESS_?TOKEN|AUTH_?TOKEN|TOKEN)' + _SUFFIX + _SEP
+    + r'(?![0-9]{1,64}(?![^\s"\',;}]))' + _VALUE
+    + r'|(?:API_?KEY|PRIVATE_?KEY|ACCESS_?KEY|ACCOUNT_?KEY|SECRET|PASSWORD'
+    r'|PASSWD|PWD)' + _SUFFIX + _SEP + _VALUE
+)
+
 # The password in scheme://user:password@host. Only group 1 is redacted, so the
 # user and host stay readable: Python's lookbehind must be fixed-width, and a
 # .sub pass with this pattern would eat the whole URL, so redact() takes
@@ -111,7 +135,7 @@ PLACEHOLDER = "[REDACTED]"
 def redact(text: str) -> str:
     """Replace credential-shaped substrings with a placeholder."""
     # Private-key blocks go first, as their own pass (see KEY). Then the union
-    # of the matches of SECRET, BEARER, SK_DASHED and the four vendor key
+    # of the matches of SECRET, BEARER, SK_DASHED, SUFFIXED and the four vendor key
     # patterns, and URL_PASSWORD's password group. When only SECRET matches,
     # this equals SECRET.sub(PLACEHOLDER, KEY.sub(PLACEHOLDER, text)).
     text = KEY.sub(PLACEHOLDER, text)
@@ -119,8 +143,8 @@ def redact(text: str) -> str:
         [
             m.span()
             for pattern in (
-                SECRET, BEARER, SK_DASHED, GITHUB_PAT, STRIPE_KEY, GOOGLE_API_KEY,
-                GITLAB_PAT,
+                SECRET, BEARER, SK_DASHED, SUFFIXED, GITHUB_PAT, STRIPE_KEY,
+                GOOGLE_API_KEY, GITLAB_PAT,
             )
             for m in pattern.finditer(text)
         ]
