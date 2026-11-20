@@ -825,6 +825,13 @@ class HookTest(LocalServerTest):
         "http://localhost:3000?email=a@b.com",
         "the secret key is stored in vault",
         "secret_keyboard=abcdefgh",
+        # Upper-case suffixed names that are counts and limits, not secrets.
+        "token_count: 123456",
+        "TOKEN_COUNT=123456",
+        "TOKEN2_COUNT=123456",
+        "MAX_TOKEN_LIMIT=4096000",
+        "SECRET_ROTATION_DAYS=90",
+        "PASSWORD_MIN_LENGTH=12",
         "the private key is in ~/.ssh",
         "bearer tokens expire after an hour",
         # Vendor key prefixes in ordinary identifiers and prose.
@@ -1084,6 +1091,67 @@ class HookTest(LocalServerTest):
                 Recorder.posts.clear()
                 start = time.monotonic()
                 self.recall(prompt=prompt)
+                elapsed = time.monotonic() - start
+                self.assertLess(elapsed, 5, f"recall took {elapsed:.1f}s")
+                self.assertTrue(self.searches(), "the hook never reached the search")
+
+    # An upper-case keyword followed by a suffix before the separator.
+    SUFFIXED_NAMES = [
+        ("SECRET_KEY_BASE=" + "a1b2c3a1b2c3a1b2c3", "a1b2c3a1b2c3a1b2c3"),
+        ("export GITHUB_TOKEN_RO=" + "ghxabc123abc123abc123", "ghxabc123abc123abc123"),
+        ("DB_PASSWORD_PROD=" + "hunter2hunter2", "hunter2hunter2"),
+        ("DB_PASSWORD_PROD=" + "correcthorsebattery", "correcthorsebattery"),
+        ("DB_PASSWORD_PROD=" + "12345678", "12345678"),
+        ("GITHUB_TOKEN_READ_ONLY_FOR_CI=" + "abcdef123456", "abcdef123456"),
+        ("STRIPE_API_KEY_LIVE_EU_WEST_1=" + "abcdef123456", "abcdef123456"),
+        ("DB_PASSWORD2_PROD=" + "abcdef123456", "abcdef123456"),
+        ("JWT_SECRET_SIGNING_KEY_X=" + "abcdef123456", "abcdef123456"),
+        ('DB_PASSWORD_PROD: "' + 'longpassword"', "longpassword"),
+        ('{"DB_PASSWORD_PROD":"' + 'longpassword"}', "longpassword"),
+        ('{\\"DB_PASSWORD_PROD\\":\\"' + 'longpassword\\"}', "longpassword"),
+    ]
+
+    def test_capture_suffixed_name_does_not_hide_the_assignment_after_it(self):
+        content = self._captured("API_TOKEN_V2=" + "abcdef123456 password=" + "hunter22x")
+        self.assertNotIn("abcdef123456", content)
+        self.assertNotIn("hunter22x", content)
+
+    def test_capture_redacts_keyword_suffix_names(self):
+        for line, value in self.SUFFIXED_NAMES:
+            with self.subTest(line=line):
+                content = self._captured(line)
+                self.assertNotIn(value, content)
+                self.assertIn("[REDACTED]", content)
+
+    SUFFIXED_KEYWORDS = [
+        "API_KEY_X", "APIKEY_X", "API_TOKEN_X", "ACCESS_TOKEN_X", "AUTH_TOKEN_X",
+        "TOKEN_X", "SECRET_X", "PRIVATE_KEY_X", "ACCESS_KEY_X", "ACCOUNT_KEY_X",
+        "PASSWORD_X", "PASSWD_X", "PWD_X", "PASSWORD2", "TOKEN_A_B_C_D_E_F",
+    ]
+
+    def test_capture_redacts_every_suffixed_keyword(self):
+        # Exact output: with only TOKEN kept, API_TOKEN_X= would leave API_[REDACTED].
+        for name in self.SUFFIXED_KEYWORDS:
+            with self.subTest(name=name):
+                lines = self._captured(name + "=valueabc123").strip().splitlines()
+                self.assertEqual(lines[-1], "- [REDACTED]")
+
+    def test_prompt_recall_redacts_keyword_suffix_names(self):
+        for line, value in self.SUFFIXED_NAMES[:3]:
+            with self.subTest(line=line):
+                Recorder.posts.clear()
+                self.recall(prompt=f"why does {line} fail")
+                self.assertNotIn(value, self.searches()[0]["query"])
+
+    def test_prompt_recall_suffix_pattern_is_bounded(self):
+        # The hook payload travels in one environment variable, which Linux caps
+        # at 128 KiB, so the longer units repeat fewer times (about 100-120 KB).
+        for unit, count in (("TOKEN_", 20000), ("PASSWORD_", 12000),
+                            ("PASSWORD2_", 10000)):
+            with self.subTest(unit=unit):
+                Recorder.posts.clear()
+                start = time.monotonic()
+                self.recall(prompt=unit * count, session=unit)
                 elapsed = time.monotonic() - start
                 self.assertLess(elapsed, 5, f"recall took {elapsed:.1f}s")
                 self.assertTrue(self.searches(), "the hook never reached the search")
