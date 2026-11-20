@@ -326,7 +326,7 @@ plugin/
 ├── commands/login.md             /kemory:login
 ├── commands/status.md            /kemory:status
 ├── skills/                       kemory, setup
-└── scripts/                      one script and one .py program per hook, plus lib, redact, muse_log and transcript
+└── scripts/                      one script and one .py program per hook, plus lib, redact, muse_log, transcript and hook_request
 ```
 
 Everything here is the plugin itself — one tree, a manifest per host, rather
