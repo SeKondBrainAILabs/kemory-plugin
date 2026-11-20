@@ -41,7 +41,7 @@ def listed(rel, text, operator):
     """The `--list` lines for the given file line with the given operator."""
     n = line_number(rel, text)
     out = run_tool("--list").stdout.splitlines()
-    return [l for l in out if l.startswith(f"{rel}:{n}  {operator}  ")]
+    return [row for row in out if row.startswith(f"{rel}:{n}  {operator}  ")]
 
 
 class ListTest(unittest.TestCase):

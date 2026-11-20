@@ -130,7 +130,7 @@ def scan_file(path, rel):
     lines = text.split("\n")
     if lines and lines[-1] == "":
         lines.pop()
-    last = max((i for i, l in enumerate(lines) if l.strip()), default=-1)
+    last = max((i for i, text_line in enumerate(lines) if text_line.strip()), default=-1)
     is_shell = str(path).endswith(".sh")
     heredocs = heredoc_regions(lines) if is_shell else {}
     mutants, unmutated = [], []
@@ -332,7 +332,6 @@ def main():
     runner = Runner()
     tmp = pathlib.Path(tempfile.mkdtemp(prefix="kemory-mutate-"))
     began = time.monotonic()
-    results = {}  # mutant key+op+text -> status
     try:
         baselines = {}
         distinct = sorted({s for s in selection.values() if s})
