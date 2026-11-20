@@ -833,6 +833,7 @@ class HookTest(LocalServerTest):
         "SECRET_ROTATION_DAYS=90",
         "PASSWORD_MIN_LENGTH=12",
         "the private key is in ~/.ssh",
+        "bearer tokens expire after an hour",
         # Vendor key prefixes in ordinary identifiers and prose.
         "risk_test_validateEverythingHere",
         "export GITHUB_PAT_ROTATION_REMINDER_DAYS=30",
@@ -1205,6 +1206,54 @@ class HookTest(LocalServerTest):
                 for line in self.KEY_BODY:
                     self.assertNotIn(line, content)
                 self.assertIn("done", content)
+
+    def test_capture_redacts_bearer_tokens_with_base64_characters(self):
+        # Opaque bearer tokens are often standard base64, with '+' and '/'.
+        token = "abc/DEF+ghi/JKL" + "mnopqrstuv=="
+        content = self._captured("Authorization: Bearer " + token)
+        self.assertNotIn("JKLmnopqrstuv", content)
+        self.assertIn("[REDACTED]", content)
+
+    # Each character of BEARER's class, early (index 2) and late (index 12) in a
+    # 22-character token.
+    BEARER_TOKENS = [
+        base[:p] + ch + base[p + 1:]
+        for base in ("Ab3dEf6hIj" + "KlMn0pQr5tUv",)
+        for ch in "+/~=-._"
+        for p in (2, 12)
+    ]
+
+    def test_capture_redacts_each_bearer_token_character(self):
+        for token in self.BEARER_TOKENS:
+            with self.subTest(token=token):
+                content = self._captured("Authorization: Bearer " + token)
+                self.assertNotIn(token[-10:], content)
+                self.assertIn("[REDACTED]", content)
+
+    def test_prompt_recall_redacts_bearer_tokens_with_base64_characters(self):
+        for token in self.BEARER_TOKENS + ["abc/DEF+ghi/JKL" + "mnopqrstuv=="]:
+            with self.subTest(token=token):
+                Recorder.posts.clear()
+                self.recall(prompt="Authorization: Bearer " + token
+                            + " returns 401, why")
+                self.assertNotIn(token[-10:], self.searches()[0]["query"])
+
+    def test_bearer_token_does_not_hide_the_secret_after_it(self):
+        # As measured: main redacts the first two cases in full, and the version
+        # of this fix that widens the bearer branch inside SECRET leaks
+        # ':cretvalue' and ':cdefghijkl', so those two guard against moving the
+        # rule into SECRET. The third leaks on main and inline both and is fixed
+        # only by the separate pattern.
+        cases = [
+            ("Bearer abcdefgh/" + "token=se:" + "cretvalue", "cretvalue"),
+            ("Bearer abcdefgh/" + "secret=ab:" + "cdefghijkl", "cdefghijkl"),
+            ("Bearer " + "password=" + "abc:defghi", "defghi"),
+        ]
+        for line, fragment in cases:
+            with self.subTest(line=line):
+                content = self._captured(line)
+                self.assertNotIn(fragment, content)
+                self.assertIn("[REDACTED]", content)
 
     def test_capture_redacts_quoted_passwords_with_punctuation_or_spaces(self):
         # Inside quotes, the closing quote ends the value; a comma, semicolon or
