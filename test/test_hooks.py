@@ -2587,6 +2587,22 @@ class CredentialTest(LocalServerTest):
         self.assertTrue(sent, "prompt recall made no request")
         self.assertEqual(set(sent), {"org-b"})
 
+    def test_capture_sends_the_selected_organisation(self):
+        self.write_creds(expires_at=time.time() + 3600, active_org_id="org-b")
+        transcript = pathlib.Path(self.home) / "session.jsonl"
+        transcript.write_text(json.dumps(
+            {"type": "user", "message": {"content": "add retries to the upload"}}) + "\n")
+        e = clean_env()
+        e["HOME"] = self.home
+        run_with_timeout([str(SCRIPTS / "capture.sh")], text=True,
+                       capture_output=True, env=e, timeout=30,
+                       input=json.dumps({"session_id": "s", "hook_event_name": "SessionEnd",
+                                         "reason": "other", "transcript_path": str(transcript)}))
+        sent = [h.get("X-Organization-ID") for h, _, path in Recorder.posts
+                if path == "/api/v1/memories"]
+        self.assertTrue(sent, "capture made no request")
+        self.assertEqual(set(sent), {"org-b"})
+
     def test_live_token_is_not_refreshed(self):
         self.write_creds(expires_at=time.time() + 3600,
                          access_token="still-good")
@@ -5525,14 +5541,14 @@ PY_FROM_IMPORT_PATTERN = re.compile(r"\bfrom\s+([A-Za-z_][\w.]*)\s+import\b")
 PY_IMPORT_PATTERN = re.compile(r"(?:^|[;'\"\s])import\s+([A-Za-z_][\w.]*(?:\s*,\s*[A-Za-z_][\w.]*)*)", re.M)
 EXEC_PATTERN = re.compile(r"\bexec\s+(?:python3\s+)?(\S+)")
 REPO_PATH_PATTERN = re.compile(r"(?<![\w.-])((?:\.\./)*(?:scripts|test)/[\w./-]+)")
-ALLOWED_IMPORTS = {"redact", "muse_log", "kemory_lib"}
+ALLOWED_IMPORTS = {"redact", "muse_log", "hook_request", "kemory_lib"}
 ALLOWED_EXEC_COMMANDS = {"kemory"}
 
 
 def plugin_dependency_violations(name, text, siblings):
     """Dependencies of one plugin/scripts file that CLAUDE.md does not allow.
 
-    A file may source lib.sh, import the standard library, redact and muse_log, exec a
+    A file may source lib.sh, import the standard library, redact, muse_log and hook_request, exec a
     sibling entry file (or the kemory CLI), and name no path in the repo's own
     scripts/ or test/, which do not ship. `siblings` is the set of file names
     in plugin/scripts, so `scripts/mcp.sh` in a comment is read as the plugin's.
@@ -5579,6 +5595,16 @@ class PluginDependencyTest(unittest.TestCase):
         defining = [path.name for path in sorted(SCRIPTS.iterdir())
                     if path.is_file() and "def muse_session_log" in path.read_text(errors="replace")]
         self.assertEqual(defining, ["muse_log.py"])
+
+    def test_request_guard_is_defined_once(self):
+        defining = [path.name for path in sorted(SCRIPTS.iterdir())
+                    if path.is_file() and "non-HTTP scheme" in path.read_text(errors="replace")]
+        self.assertEqual(defining, ["hook_request.py"])
+
+    def test_env_int_is_defined_once(self):
+        defining = [path.name for path in sorted(SCRIPTS.iterdir())
+                    if path.is_file() and "def env_int" in path.read_text(errors="replace")]
+        self.assertEqual(defining, ["hook_request.py"])
 
     def test_scanner_reports_a_source_of_another_file(self):
         self.assertEqual(
