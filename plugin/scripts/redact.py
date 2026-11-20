@@ -96,6 +96,34 @@ URL_PASSWORD = re.compile(
     r'(?i)\b[a-z][a-z0-9+.-]{0,31}://[^\s:/]{0,256}:([^\s/?#]{1,256})@'
 )
 
+# The credential in an Authorization: Basic header (base64 of user:password).
+# It is its own pattern, not a branch of SECRET: a branch there would win the
+# leftmost match and swallow a following keyword match. Only group 1, the
+# credential, is redacted, so the header name and scheme stay readable.
+# (?<![a-z]) instead of \b lets HTTP_AUTHORIZATION and PROXY_AUTHORIZATION
+# (WSGI/CGI env, Django request.META, PHP $_SERVER) match. The separator accepts
+# ':', '=', '=>' (Ruby/PHP), an optional ']' after a quoted subscript
+# (headers['Authorization'] =), ',' after a quoted name (Java
+# setRequestProperty) and whitespace before a quote (nginx proxy_set_header,
+# Apache RequestHeader). Whitespace is [ \t] so a match never crosses a line.
+# The lookahead requires a digit, one of + / = : @ ! # % & *, or a lowercase
+# letter followed later by an uppercase one (case-sensitive), so words such as
+# 'header', 'Authentication' and 'YOUR_CREDENTIALS_HERE' stay, while base64 with
+# no digit or padding is still caught. Both lookahead branches use classes that
+# cannot backtrack into each other, so the scan is linear. The credential stops
+# at whitespace, a quote, a backslash, ',' or ';', and may not start with $, <
+# or {, so 'Basic $CREDS', 'Basic <credentials>' and f"Basic {token}" stay.
+# Every quantifier is bounded: redact() runs on the whole raw prompt in the
+# synchronous prompt-recall hook.
+AUTH_BASIC = re.compile(
+    r'(?i)(?<![a-z])authorization'
+    r'(?:\\?["\']?\]?[ \t]{0,16}[:=]>?|\\?["\'][ \t]{0,16},|[ \t]{1,16}(?=\\?["\']))'
+    r'[ \t]{0,16}\\?["\']?basic[ \t]{1,16}'
+    r'(?=[^\s"\'\\,;]{0,511}[0-9+/=:@!#%&*]'
+    r'|(?-i:[^\s"\'\\,;a-z]{0,511}[a-z][^\s"\'\\,;A-Z]{0,510}[A-Z]))'
+    r'([^\s"\'\\,;$<{][^\s"\'\\,;]{5,511})'
+)
+
 PLACEHOLDER = "[REDACTED]"
 
 
@@ -103,7 +131,7 @@ def redact(text: str) -> str:
     """Replace credential-shaped substrings with a placeholder."""
     # Private-key blocks go first, as their own pass (see KEY). Then the union
     # of the matches of SECRET, SK_DASHED and the four vendor key patterns, and
-    # URL_PASSWORD's password group. When only SECRET matches, this equals
+    # the password group of URL_PASSWORD and the credential group of AUTH_BASIC. When only SECRET matches, this equals
     # SECRET.sub(PLACEHOLDER, KEY.sub(PLACEHOLDER, text)).
     text = KEY.sub(PLACEHOLDER, text)
     spans = sorted(
@@ -115,6 +143,7 @@ def redact(text: str) -> str:
             for m in pattern.finditer(text)
         ]
         + [m.span(1) for m in URL_PASSWORD.finditer(text)]
+        + [m.span(1) for m in AUTH_BASIC.finditer(text)]
     )
     merged = []
     for start, end in spans:

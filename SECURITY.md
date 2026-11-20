@@ -15,7 +15,8 @@ that covers, and set the variable to `0` if you do not want it.
 
 **Redaction is best-effort.** `plugin/scripts/redact.py` strips common secret
 shapes from both the session digest and the prompt-recall query (bearer tokens,
-`api_key=`/`password=` assignments, including quoted
+the credential in `Authorization: Basic` and `Proxy-Authorization: Basic`
+headers, `api_key=`/`password=` assignments, including quoted
 keys such as `"api_key": "..."`, `sk-` keys (including `sk-ant-` and
 `sk-proj-`), `gh*_`, GitHub fine-grained tokens (`github_pat_`), Stripe secret
 and restricted keys (`sk_live_`, `rk_live_`, `sk_test_`, `rk_test_`), Google API
