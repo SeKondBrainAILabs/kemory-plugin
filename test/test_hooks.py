@@ -517,6 +517,26 @@ class HookTest(LocalServerTest):
         self.assertIn("- turn 0 work", content)
         self.assertIn("after image", content)
 
+    def test_capture_reads_only_text_parts(self):
+        Recorder.posts.clear()
+        lines = [json.dumps({"type": "user", "message": {"content": content}}) for content in (
+            [{"type": "tool_result", "text": "tool noise"},
+             {"type": "text", "text": "real words"}],
+            [{"text": "untyped noise"}, {"type": "text", "text": "typed words"}],
+            [{"type": "text", "text": "alpha"}, {"type": "image", "source": {}},
+             {"type": "text", "text": "beta"}],
+        )]
+        self.run_script("capture.sh",
+                        {"session_id": "textparts", "hook_event_name": "SessionEnd",
+                         "transcript_path": self.raw_transcript(lines)},
+                        KEMORY_API_KEY="k")
+        self.assertEqual(len(Recorder.posts), 1)
+        content = Recorder.posts[0][1]["content"]
+        turns = content.splitlines()
+        for expected in ("- real words", "- typed words", "- alpha beta"):
+            self.assertIn(expected, turns)
+        self.assertNotIn("noise", content)
+
     # --- standing instruction (SessionStart) -------------------------------
     INSTRUCTION_MARK = "Kemory is this user's persistent memory"
 
@@ -5541,14 +5561,14 @@ PY_FROM_IMPORT_PATTERN = re.compile(r"\bfrom\s+([A-Za-z_][\w.]*)\s+import\b")
 PY_IMPORT_PATTERN = re.compile(r"(?:^|[;'\"\s])import\s+([A-Za-z_][\w.]*(?:\s*,\s*[A-Za-z_][\w.]*)*)", re.M)
 EXEC_PATTERN = re.compile(r"\bexec\s+(?:python3\s+)?(\S+)")
 REPO_PATH_PATTERN = re.compile(r"(?<![\w.-])((?:\.\./)*(?:scripts|test)/[\w./-]+)")
-ALLOWED_IMPORTS = {"redact", "muse_log", "hook_request", "kemory_lib"}
+ALLOWED_IMPORTS = {"redact", "muse_log", "transcript", "hook_request", "kemory_lib"}
 ALLOWED_EXEC_COMMANDS = {"kemory"}
 
 
 def plugin_dependency_violations(name, text, siblings):
     """Dependencies of one plugin/scripts file that CLAUDE.md does not allow.
 
-    A file may source lib.sh, import the standard library, redact, muse_log and hook_request, exec a
+    A file may source lib.sh, import the standard library, redact, muse_log, transcript and hook_request, exec a
     sibling entry file (or the kemory CLI), and name no path in the repo's own
     scripts/ or test/, which do not ship. `siblings` is the set of file names
     in plugin/scripts, so `scripts/mcp.sh` in a comment is read as the plugin's.
@@ -5595,6 +5615,24 @@ class PluginDependencyTest(unittest.TestCase):
         defining = [path.name for path in sorted(SCRIPTS.iterdir())
                     if path.is_file() and "def muse_session_log" in path.read_text(errors="replace")]
         self.assertEqual(defining, ["muse_log.py"])
+
+    def test_transcript_parsing_is_defined_once(self):
+        defs = ("def records(", "def blocks(", "def text(", "def intent(",
+                "def content(", "def muse_event(")
+        for path in sorted(SCRIPTS.iterdir()):
+            if path.is_file() and path.name != "transcript.py":
+                for line in path.read_text(errors="replace").splitlines():
+                    self.assertFalse(line.startswith(defs), f"{path.name} defines {line}")
+        for name in ("capture.py", "store_nudge.py"):
+            source = (SCRIPTS / name).read_text()
+            self.assertNotIn("json.loads(line", source, name)
+            self.assertNotIn('"Caveat:"', source, name)
+            lines = source.splitlines()
+            self.assertIn("import transcript as tlog  # noqa: E402", lines, name)
+            # The hooks bind a str named transcript; a bare import would be rebound.
+            for line in lines:
+                self.assertIsNone(re.match(r"^\s*import transcript\s*(#.*)?$", line), name)
+                self.assertIsNone(re.match(r"^\s*from transcript import", line), name)
 
     def test_request_guard_is_defined_once(self):
         defining = [path.name for path in sorted(SCRIPTS.iterdir())
