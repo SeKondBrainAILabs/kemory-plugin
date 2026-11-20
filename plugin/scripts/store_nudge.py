@@ -6,6 +6,7 @@ import sys
 
 sys.path.insert(0, os.environ["KEMORY_SCRIPT_DIR"])
 from muse_log import muse_session_log  # noqa: E402
+import transcript as tlog  # noqa: E402
 
 # Phrases that mark a turn as having settled something worth keeping. Kept
 # deliberately narrow: every entry here is a phrase that states a conclusion,
@@ -63,16 +64,7 @@ if not transcript or not os.path.isfile(transcript):
     die()
 
 try:
-    events = []
-    with open(transcript, errors="replace") as fh:
-        for line in fh:
-            try:
-                ev = json.loads(line)
-            except Exception:
-                continue
-            # Valid JSON is not always an object; only objects are records.
-            if isinstance(ev, dict):
-                events.append(ev)
+    events = list(tlog.records(transcript))
 except Exception:
     die()
 
@@ -80,50 +72,23 @@ if not events:
     die()
 
 
-def content_of(ev):
-    message = ev.get("message")
-    return message.get("content") if isinstance(message, dict) else None
-
-
-def blocks(ev):
-    content = content_of(ev)
-    return content if isinstance(content, list) else []
-
-
-def text_of(ev):
-    content = content_of(ev)
-    if isinstance(content, str):
-        return content
-    return " ".join(b.get("text", "") for b in blocks(ev)
-                    if isinstance(b, dict) and b.get("type") == "text"
-                    and isinstance(b.get("text", ""), str))
-
-
-def muse_event(ev):
-    """(payload.kind, payload.event) of a Muse session record, else None."""
-    if ev.get("type") in ("user", "assistant") or not isinstance(ev.get("payload"), dict):
-        return None
-    inner = ev["payload"].get("event")
-    return (ev["payload"].get("kind"), inner if isinstance(inner, dict) else {})
-
-
 def muse_turn(events):
     """The turn from the last run-started record on, and its prompt plus replies."""
-    kinds = [(ev, (muse_event(ev) or ("", {}))[1].get("kind")) for ev in events]
+    kinds = [(ev, (tlog.muse_event(ev) or ("", {}))[1].get("kind")) for ev in events]
     starts = [i for i, (ev, k) in enumerate(kinds)
-              if k == "started" and muse_event(ev)[0] == "run"]
+              if k == "started" and tlog.muse_event(ev)[0] == "run"]
     if not starts:
         return [], ""
     texts = []
     for ev, k in kinds[starts[-1]:]:
-        inner = muse_event(ev)[1]
+        inner = tlog.muse_event(ev)[1]
         field = "prompt" if k == "started" else "text" if k == "assistant_message_committed" else ""
         if isinstance(inner.get(field), str):
             texts.append(inner[field])
     return [ev for ev, _ in kinds[starts[-1]:]], "\n".join(filter(None, texts))
 
 
-if any(muse_event(ev) for ev in events):
+if any(tlog.muse_event(ev) for ev in events):
     turn, haystack = muse_turn(events)
     if not turn:
         die()
@@ -137,9 +102,8 @@ else:
     for i, ev in enumerate(events):
         if ev.get("type") != "user":
             continue
-        t = text_of(ev).strip()
         # Harness-injected messages are not the user starting a turn.
-        if t and not t.startswith(("<", "Caveat:")):
+        if tlog.intent(tlog.text(ev)):
             start = i
     turn = events[start:]
     if not turn:
@@ -147,7 +111,7 @@ else:
 
     # Already stored? Then there is nothing to ask for.
     for ev in turn:
-        for b in blocks(ev):
+        for b in tlog.blocks(ev):
             if not isinstance(b, dict) or b.get("type") != "tool_use":
                 continue
             name = b.get("name") or ""
@@ -155,7 +119,7 @@ else:
                 die()
 
     haystack = "\n".join(filter(None, (
-        text_of(ev) for ev in turn if ev.get("type") in ("user", "assistant")
+        tlog.text(ev) for ev in turn if ev.get("type") in ("user", "assistant")
     )))
 
 extra = [s for s in os.environ.get("KEMORY_NUDGE_SIGNALS", "").split("|") if s]

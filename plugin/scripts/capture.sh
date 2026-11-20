@@ -36,7 +36,7 @@ kemory_resolve_auth || exit 0
 HOOK_INPUT="$(cat)"
 export HOOK_INPUT
 export KEMORY_SCRIPT_DIR="$DIR"
-# Importing redact.py must not litter the user's plugin directory.
+# Importing redact.py, muse_log.py and transcript.py must not litter the user's plugin directory.
 export PYTHONDONTWRITEBYTECODE=1
 # Session digests are the most incidentally-revealing thing this plugin
 # handles — half-formed debugging, client names, things typed before thinking.

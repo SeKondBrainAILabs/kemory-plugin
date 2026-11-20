@@ -2,38 +2,34 @@ import hashlib
 import json
 import os
 import sys
+import time
 import urllib.request
+
+try:
+    import fcntl
+except ImportError:  # native Windows Python: capture runs unlocked
+    fcntl = None
 
 sys.path.insert(0, os.environ["KEMORY_SCRIPT_DIR"])
 from redact import redact  # noqa: E402
 from muse_log import muse_session_log  # noqa: E402
+import transcript as tlog  # noqa: E402
+from hook_request import env_int, request_setup  # noqa: E402
 
 MAX_CHARS = 8000
+# The host kills capture at 15 s and this program was allowed 8 s for its POST
+# before locking existed. Lock wait plus POST must not pass that 8 s, so a run
+# that waited shortens its POST timeout by the time it waited.
+POST_TIMEOUT_SECONDS = 8
+LOCK_WAIT_SECONDS = 5
+LOCK_POLL_SECONDS = 0.1
 
 
 def die():
     raise SystemExit(0)
 
 
-def env_int(name, default):
-    try:
-        return int(os.environ[name])
-    except (KeyError, ValueError):
-        return default
-
-
-try:
-    url = os.environ["KEMORY_BASE_URL"]
-    auth_name, _, auth_value = os.environ["KEMORY_AUTH_HEADER"].partition(": ")
-    # The organisation `kemory use` selected, as the CLI sends it (lib.sh).
-    org_name, _, org_value = os.environ.get("KEMORY_ORG_HEADER", "").partition(": ")
-    hook = json.loads(os.environ["HOOK_INPUT"])
-except Exception:
-    die()
-if not url or not auth_value:
-    die()
-if not url.startswith(("http://", "https://")):
-    die()  # never send a credential to a non-HTTP scheme
+url, headers, hook = request_setup()
 
 # A Stop hook that runs because of a Stop hook would capture in a loop.
 if hook.get("stop_hook_active"):
@@ -69,39 +65,23 @@ when = (
 # assistant output keeps the digest small and avoids re-storing tool dumps.
 turns = []
 try:
-    with open(transcript, errors="replace") as fh:
-        for line in fh:
-            try:
-                ev = json.loads(line)
-            except Exception:
-                continue
-            # Valid JSON is not always an object; only objects are records.
-            if not isinstance(ev, dict):
-                continue
-            # A Muse session log: a user turn is a run-started record.
-            if ev.get("type") not in ("user", "assistant") and isinstance(ev.get("payload"), dict):
-                run = ev["payload"].get("event")
-                if ev["payload"].get("kind") == "run" and isinstance(run, dict) \
-                        and run.get("kind") == "started" and isinstance(run.get("prompt"), str):
-                    t = run["prompt"].strip()
-                    if t and not t.startswith(("<", "Caveat:")):
-                        turns.append(t)
-                continue
-            if ev.get("type") != "user":
-                continue
-            message = ev.get("message")
-            content = message.get("content") if isinstance(message, dict) else None
-            if isinstance(content, list):
-                content = " ".join(
-                    p.get("text", "")
-                    if isinstance(p, dict) and isinstance(p.get("text", ""), str) else ""
-                    for p in content
-                )
-            if isinstance(content, str):
-                t = content.strip()
-                # Skip harness-injected noise, not real user intent.
-                if t and not t.startswith(("<", "Caveat:")):
+    for ev in tlog.records(transcript):
+        # A Muse session log: a user turn is a run-started record.
+        muse = tlog.muse_event(ev)
+        if muse:
+            kind, run = muse
+            if kind == "run" and run.get("kind") == "started" \
+                    and isinstance(run.get("prompt"), str):
+                t = tlog.intent(run["prompt"])
+                if t:
                     turns.append(t)
+            continue
+        if ev.get("type") != "user":
+            continue
+        # Skip harness-injected noise, not real user intent.
+        t = tlog.intent(tlog.text(ev))
+        if t:
+            turns.append(t)
 except Exception:
     die()
 
@@ -112,12 +92,40 @@ if not turns:
 # sliding window below produces a different digest every turn and every Stop
 # would store a near-duplicate of the last one.
 marker, state = None, {"digest": "", "captured_turns": 0}
+marker_fd = None
+waited = 0.0
 state_dir = os.path.expanduser("~/.kemory/.captured")
 try:
     os.makedirs(state_dir, exist_ok=True)
     marker = os.path.join(state_dir, (session_id or "nosession")[:64].replace("/", "_"))
-    if os.path.isfile(marker):
-        raw = open(marker).read().strip()
+    # Capture runs async on Stop, PreCompact and SessionEnd, so two runs for one
+    # session can overlap. Lock the marker itself, before reading it, and hold
+    # the lock until the mark is written; the kernel drops it when the run exits.
+    # An empty marker is left behind by runs that exit early, and is never
+    # unlinked: a run waiting on the lock would then lock a dead inode.
+    if fcntl is not None:
+        try:
+            marker_fd = os.open(marker, os.O_RDWR | os.O_CREAT, 0o600)
+            started = time.monotonic()
+            while True:
+                try:
+                    fcntl.flock(marker_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if time.monotonic() - started >= LOCK_WAIT_SECONDS:
+                        die()
+                    time.sleep(LOCK_POLL_SECONDS)
+                    waited = time.monotonic() - started
+            raw = b"".join(iter(lambda: os.read(marker_fd, 65536), b"")).decode(errors="replace").strip()
+        except OSError:
+            # No lock available: behave as without locking.
+            if marker_fd is not None:
+                os.close(marker_fd)
+            marker_fd = None
+            raw = open(marker, errors="replace").read().strip() if os.path.isfile(marker) else ""
+    else:
+        raw = open(marker, errors="replace").read().strip() if os.path.isfile(marker) else ""
+    if raw:
         try:
             loaded = json.loads(raw)
             if isinstance(loaded, dict):
@@ -179,20 +187,25 @@ req = urllib.request.Request(
             "end_reason": reason,
         },
     }).encode(),
-    headers={
-        auth_name: auth_value,
-        **({org_name: org_value} if org_value else {}),
-        "Content-Type": "application/json",
-    },
+    headers=headers,
     method="POST",
 )
 try:
-    urllib.request.urlopen(req, timeout=8).read()
+    urllib.request.urlopen(
+        req, timeout=max(3, POST_TIMEOUT_SECONDS - waited) if waited else POST_TIMEOUT_SECONDS
+    ).read()
 except Exception:
     raise SystemExit(0)  # never advance the mark past turns we did not store  # noqa: B904
 if marker:
     try:
-        with open(marker, "w") as fh:
-            json.dump({"digest": digest, "captured_turns": len(turns)}, fh)
+        if marker_fd is not None:
+            with os.fdopen(marker_fd, "w") as fh:
+                fh.seek(0)
+                fh.truncate()
+                json.dump({"digest": digest, "captured_turns": len(turns)}, fh)
+                fh.flush()
+        else:
+            with open(marker, "w") as fh:
+                json.dump({"digest": digest, "captured_turns": len(turns)}, fh)
     except OSError:
         pass

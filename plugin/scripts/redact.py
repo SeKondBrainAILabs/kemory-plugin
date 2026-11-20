@@ -21,8 +21,7 @@ import re
 # PRIVATE_KEY, ACCESS_KEY and ACCOUNT_KEY (an Azure AccountKey=). `secret` alone
 # still needs the assignment, so "the secret key is stored in vault" is prose.
 SECRET = re.compile(
-    r'(?i)(bearer\s+[\w\-\.]{8,}'
-    r'|(?:api[_-]?key|api[_-]?token|access[_-]?token|auth[_-]?token|token'
+    r'(?i)((?:api[_-]?key|api[_-]?token|access[_-]?token|auth[_-]?token|token'
     r'|secret[a-z0-9_-]{0,24}?key|private[_-]?key|access[_-]?key|account[_-]?key'
     r'|secret|password|passwd|pwd)\\?["\']?\s*[:=]\s*\\?'
     r'(?:"[^"\n]{6,256}"|\'[^\'\n]{6,256}\'|["\']?[^\s"\',;}]{6,})'
@@ -30,6 +29,16 @@ SECRET = re.compile(
     r'|AKIA[0-9A-Z]{16}|xox[baprs]-[A-Za-z0-9-]{10,}'
     r'|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})'
 )
+
+# A bearer token, in the RFC 6750 alphabet: word characters, '.', '~', '+', '/',
+# '-' and '=' padding (standard base64 has '+', '/' and '='). This is its own
+# pattern, unioned in redact(), and not a branch of SECRET: with '/' and '=' in
+# its class, a branch starting at "Bearer" wins the leftmost match, stops at a
+# ':' inside a later value and leaks the rest ('Bearer abcdefgh/token=se:cretvalue'
+# became '[REDACTED]:cretvalue'). The class is one run after a fixed literal, so
+# the scan is linear and the {8,} stays unbounded: a cap would leak the tail of a
+# longer token.
+BEARER = re.compile(r'(?i)bearer\s+[\w.~+/=-]{8,}')
 
 # A private key is secret in its body, not its header, so this takes the whole
 # block, BEGIN line to END line (PEM, OpenSSH and PGP). It runs as its own pass
@@ -47,6 +56,26 @@ KEY = re.compile(
     r'(?:[\s\S]{0,16384}?-----END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----'
     r'|(?:(?:\s|\\[rn])+(?:[A-Za-z0-9+/=]{16,}'
     r'|(?:Proc-Type|DEK-Info|Version|Comment|Hash|Charset):[^\n]*))*)'
+)
+
+# A PuTTY .ppk file has no BEGIN line and its secret is the Private-Lines body.
+# The file states the body's length, so this pass takes the header, the next N
+# lines whatever their prefix (indent, '> ', '- ', '// ', line numbers), and the
+# Private-MAC (Private-Hash in v1) line if it follows. A line break is CR, LF,
+# CRLF or a single- or double-escaped backslash-r/n (JSON in a prompt, JSON in
+# JSON). The public lines, Comment and Argon2 headers are not secret and stay.
+# Each search starts where the last stopped, so every character is scanned once
+# and a prompt full of headers cannot stall the synchronous recall hook.
+# Limits:
+# - a header that is missing or states fewer lines than the body leaks the rest;
+# - lines joined by anything else (such as <br>) are one line;
+# - a paste cut off mid-body, or prose saying 'Private-Lines: N', loses the rest
+#   of that line and the next N lines (or the rest of the text).
+_PPK_EOL = r'(?:\r?\n|(?:\\{1,2}r)?\\{1,2}n|\\{1,2}r|\r)'
+PPK_HEADER = re.compile(r'(?i)Private-Lines:[ \t]*(\d{1,3})\b')
+PPK_BREAK = re.compile(_PPK_EOL)
+PPK_MAC = re.compile(
+    r'(?i)' + _PPK_EOL + r'[^\r\n]{0,64}?Private-(?:MAC|Hash):[ \t]*[0-9a-f]{0,128}'
 )
 
 # Anthropic and OpenAI project and service keys have dashes and underscores
@@ -83,6 +112,30 @@ GOOGLE_API_KEY = re.compile(r'AIza[0-9A-Za-z_-]{35}')
 # A GitLab personal access token. Other GitLab token prefixes are not covered.
 GITLAB_PAT = re.compile(r'glpat-[A-Za-z0-9_.-]{20,}')
 
+# An upper-case env-style name with a keyword and then a suffix: SECRET_KEY_BASE=,
+# GITHUB_TOKEN_RO=, DB_PASSWORD_PROD=, PASSWORD2=. SECRET needs the keyword
+# right before the separator, so a suffix let the value through. This is its own
+# pattern, unioned in redact(), not a branch of SECRET, which is
+# case-insensitive and would also take config such as token_count: 123456.
+#
+# It is case-sensitive because of the env-var convention: lower-case suffixed
+# names (token_count, db_password_prod) are config or prose and are not matched.
+# Only TOKEN names skip a value of digits alone (counts and limits such as
+# TOKEN_COUNT=123456); password, secret and key names do not, so
+# DB_PASSWORD_PROD=12345678 is redacted, and so is SECRET_TOKEN_COUNT=123456,
+# by its SECRET keyword. Names with more than 6 suffix parts are not matched:
+# every quantifier is capped so the synchronous prompt-recall hook stays fast.
+# The separator and value tail are SECRET's.
+_SUFFIX = r'(?:[0-9]{1,4}(?:_[A-Z0-9]{1,16}){0,6}|(?:_[A-Z0-9]{1,16}){1,6})'
+_SEP = r'\\?["\']?\s*[:=]\s*\\?'
+_VALUE = r'(?:"[^"\n]{6,256}"|\'[^\'\n]{6,256}\'|["\']?[^\s"\',;}]{6,})'
+SUFFIXED = re.compile(
+    r'(?:API_?TOKEN|ACCESS_?TOKEN|AUTH_?TOKEN|TOKEN)' + _SUFFIX + _SEP
+    + r'(?![0-9]{1,64}(?![^\s"\',;}]))' + _VALUE
+    + r'|(?:API_?KEY|PRIVATE_?KEY|ACCESS_?KEY|ACCOUNT_?KEY|SECRET|PASSWORD'
+    r'|PASSWD|PWD)' + _SUFFIX + _SEP + _VALUE
+)
+
 # The password in scheme://user:password@host. Only group 1 is redacted, so the
 # user and host stay readable: Python's lookbehind must be fixed-width, and a
 # .sub pass with this pattern would eat the whole URL, so redact() takes
@@ -96,25 +149,83 @@ URL_PASSWORD = re.compile(
     r'(?i)\b[a-z][a-z0-9+.-]{0,31}://[^\s:/]{0,256}:([^\s/?#]{1,256})@'
 )
 
+# The credential in an Authorization: Basic header (base64 of user:password).
+# It is its own pattern, not a branch of SECRET: a branch there would win the
+# leftmost match and swallow a following keyword match. Only group 1, the
+# credential, is redacted, so the header name and scheme stay readable.
+# (?<![a-z]) instead of \b lets HTTP_AUTHORIZATION and PROXY_AUTHORIZATION
+# (WSGI/CGI env, Django request.META, PHP $_SERVER) match. The separator accepts
+# ':', '=', '=>' (Ruby/PHP), an optional ']' after a quoted subscript
+# (headers['Authorization'] =), ',' after a quoted name (Java
+# setRequestProperty) and whitespace before a quote (nginx proxy_set_header,
+# Apache RequestHeader). Whitespace is [ \t] so a match never crosses a line.
+# The lookahead requires a digit, one of + / = : @ ! # % & *, or a lowercase
+# letter followed later by an uppercase one (case-sensitive), so words such as
+# 'header', 'Authentication' and 'YOUR_CREDENTIALS_HERE' stay, while base64 with
+# no digit or padding is still caught. Both lookahead branches use classes that
+# cannot backtrack into each other, so the scan is linear. The credential stops
+# at whitespace, a quote, a backslash, ',' or ';', and may not start with $, <
+# or {, so 'Basic $CREDS', 'Basic <credentials>' and f"Basic {token}" stay.
+# Every quantifier is bounded: redact() runs on the whole raw prompt in the
+# synchronous prompt-recall hook.
+AUTH_BASIC = re.compile(
+    r'(?i)(?<![a-z])authorization'
+    r'(?:\\?["\']?\]?[ \t]{0,16}[:=]>?|\\?["\'][ \t]{0,16},|[ \t]{1,16}(?=\\?["\']))'
+    r'[ \t]{0,16}\\?["\']?basic[ \t]{1,16}'
+    r'(?=[^\s"\'\\,;]{0,511}[0-9+/=:@!#%&*]'
+    r'|(?-i:[^\s"\'\\,;a-z]{0,511}[a-z][^\s"\'\\,;A-Z]{0,510}[A-Z]))'
+    r'([^\s"\'\\,;$<{][^\s"\'\\,;]{5,511})'
+)
+
 PLACEHOLDER = "[REDACTED]"
+
+
+def _redact_ppk(text: str) -> str:
+    """Replace each PuTTY key's Private-Lines header, body and MAC line."""
+    out = []
+    pos = 0
+    while True:
+        m = PPK_HEADER.search(text, pos)
+        if not m:
+            break
+        end = m.end()
+        for _ in range(int(m.group(1))):
+            b = PPK_BREAK.search(text, end)
+            if not b:
+                end = len(text)
+                break
+            nb = PPK_BREAK.search(text, b.end())
+            end = nb.start() if nb else len(text)
+        mac = PPK_MAC.match(text, end)
+        if mac:
+            end = mac.end()
+        out.append(text[pos:m.start()])
+        out.append(PLACEHOLDER)
+        pos = end
+    out.append(text[pos:])
+    return "".join(out)
 
 
 def redact(text: str) -> str:
     """Replace credential-shaped substrings with a placeholder."""
-    # Private-key blocks go first, as their own pass (see KEY). Then the union
-    # of the matches of SECRET, SK_DASHED and the four vendor key patterns, and
-    # URL_PASSWORD's password group. When only SECRET matches, this equals
-    # SECRET.sub(PLACEHOLDER, KEY.sub(PLACEHOLDER, text)).
-    text = KEY.sub(PLACEHOLDER, text)
+    # Private-key blocks go first, as their own passes: PEM-style blocks (see
+    # KEY), then PuTTY .ppk bodies (see _redact_ppk). Then the union of the
+    # matches of SECRET, BEARER, SK_DASHED, SUFFIXED and the four vendor key
+    # patterns, URL_PASSWORD's password group and AUTH_BASIC's credential group.
+    # When only SECRET matches, this equals
+    # SECRET.sub(PLACEHOLDER, _redact_ppk(KEY.sub(PLACEHOLDER, text))).
+    text = _redact_ppk(KEY.sub(PLACEHOLDER, text))
     spans = sorted(
         [
             m.span()
             for pattern in (
-                SECRET, SK_DASHED, GITHUB_PAT, STRIPE_KEY, GOOGLE_API_KEY, GITLAB_PAT,
+                SECRET, BEARER, SK_DASHED, SUFFIXED, GITHUB_PAT, STRIPE_KEY,
+                GOOGLE_API_KEY, GITLAB_PAT,
             )
             for m in pattern.finditer(text)
         ]
         + [m.span(1) for m in URL_PASSWORD.finditer(text)]
+        + [m.span(1) for m in AUTH_BASIC.finditer(text)]
     )
     merged = []
     for start, end in spans:

@@ -24,7 +24,7 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOOK_INPUT="$(cat)"
 export HOOK_INPUT
 export KEMORY_SCRIPT_DIR="$DIR"
-# Importing muse_log.py must not litter the user's plugin directory.
+# Importing muse_log.py and transcript.py must not litter the user's plugin directory.
 export PYTHONDONTWRITEBYTECODE=1
 export KEMORY_NUDGE_SIGNALS="${KEMORY_STORE_NUDGE_SIGNALS:-}"
 
