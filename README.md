@@ -34,32 +34,6 @@ turn on.
   the end. It sends the text of your own turns, not your files or tool output
 - **`/kemory:status`** — one command that says what is and is not working
 
-## kemory and kemory-panel
-
-This marketplace has two plugins. `kemory` is the memory itself. `kemory-panel`
-is an optional add-on that shows that memory in Claude Code's interface.
-
-| | `kemory` | `kemory-panel` |
-|---|---|---|
-| What it is | Memory: the MCP server, hooks and skills | Kemory in Claude Code's interface |
-| What you get | The Kemory tools, prompt recall, session context, rate reminder, session capture, `/kemory:login`, `/kemory:status` | A status line that says whether Kemory works, a brief for the repo above the prompt, a card on each save and recall in the terminal, the `/kemory-panel:memories` panel (rate, delete, save the last reply, suggest memories), `/kemory-panel:remember`, `/kemory-panel:learned`, and auto-approval of read-only Kemory tools |
-| Runs on | Claude Code, Grok Build and Muse Code | Claude Code 2.1.267 and later; older builds and Grok ignore it |
-| Needs | A Kemory account | `kemory`, whose server and credential it uses |
-| Source | This repository | [kemory-panel](https://github.com/SeKondBrainAILabs/kemory-panel) |
-
-They are separate because the Claude plugin directory holds back plugins that
-ship an interface module or a hook that approves tool calls. Both live in
-`kemory-panel`, so `kemory` can be listed in the directory on its own. Without
-`kemory-panel`, everything in the left column works the same, and read-only
-Kemory tools ask for permission like any other tool.
-
-The card Claude shows after a save or recall (the memory, its namespace, and
-Undo or Forget) is neither plugin. The Kemory server attaches it to its save
-and recall tools, so any app that supports MCP Apps, such as Claude desktop,
-claude.ai or ChatGPT, shows it over any connection to Kemory, the claude.ai
-connector included. kemory-panel draws its own card only in the Claude Code
-terminal, which cannot show the server's.
-
 ## Install
 
 In a Claude Code **terminal**:
@@ -84,8 +58,10 @@ fully, then run `/kemory:status`.
 It signs you in the same way the Kemory CLI does and writes the same file, so
 if you install the CLI later it finds you already signed in.
 
-**Optional: `kemory-panel`**, for the interface described in
-[kemory and kemory-panel](#kemory-and-kemory-panel). Install it after `kemory`:
+**Optional: [`kemory-panel`](https://github.com/SeKondBrainAILabs/kemory-panel)**,
+an add-on that shows Kemory in Claude Code's interface. `kemory` works the same
+without it. Its README says what it adds and what it needs. Install it after
+`kemory`:
 
 ```
 /plugin install kemory-panel@kemory
