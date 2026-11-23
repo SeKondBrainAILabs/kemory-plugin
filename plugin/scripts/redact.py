@@ -20,10 +20,13 @@ import re
 # 24 characters between, so AWS_SECRET_ACCESS_KEY and JWT_SECRET_SIGNING_KEY),
 # PRIVATE_KEY, ACCESS_KEY and ACCOUNT_KEY (an Azure AccountKey=). `secret` alone
 # still needs the assignment, so "the secret key is stored in vault" is prose.
+# The assignment is ':', '=' or '=>' (PHP arrays, Ruby hashes, Perl's fat
+# comma). A JavaScript arrow function whose parameter is a keyword
+# (`token => token.trim()`) is redacted too: a missed password is worse.
 SECRET = re.compile(
     r'(?i)((?:api[_-]?key|api[_-]?token|access[_-]?token|auth[_-]?token|token'
     r'|secret[a-z0-9_-]{0,24}?key|private[_-]?key|access[_-]?key|account[_-]?key'
-    r'|secret|password|passwd|pwd)\\?["\']?\s*[:=]\s*\\?'
+    r'|secret|password|passwd|pwd)\\?["\']?\s*[:=]>?\s*\\?'
     r'(?:"[^"\n]{6,256}"|\'[^\'\n]{6,256}\'|["\']?[^\s"\',;}]{6,})'
     r'|sk-[A-Za-z0-9]{16,}|gh[pousr]_[A-Za-z0-9]{20,}'
     r'|AKIA[0-9A-Z]{16}|xox[baprs]-[A-Za-z0-9-]{10,}'
@@ -63,19 +66,24 @@ KEY = re.compile(
 # lines whatever their prefix (indent, '> ', '- ', '// ', line numbers), and the
 # Private-MAC (Private-Hash in v1) line if it follows. A line break is CR, LF,
 # CRLF or a single- or double-escaped backslash-r/n (JSON in a prompt, JSON in
-# JSON). The public lines, Comment and Argon2 headers are not secret and stay.
+# JSON). Up to 8 blank lines (spaces or tabs only) after a break are part of it,
+# so a double-spaced paste does not spend the count on blank lines and leave the
+# last body lines and the MAC in clear. The public lines, Comment and Argon2
+# headers are not secret and stay.
 # Each search starts where the last stopped, so every character is scanned once
 # and a prompt full of headers cannot stall the synchronous recall hook.
 # Limits:
 # - a header that is missing or states fewer lines than the body leaks the rest;
 # - lines joined by anything else (such as <br>) are one line;
+# - a blank line that holds a prefix ('>' in a quoted reply) is a line;
 # - a paste cut off mid-body, or prose saying 'Private-Lines: N', loses the rest
 #   of that line and the next N lines (or the rest of the text).
 _PPK_EOL = r'(?:\r?\n|(?:\\{1,2}r)?\\{1,2}n|\\{1,2}r|\r)'
+_PPK_BREAKS = _PPK_EOL + r'(?:[ \t]{0,64}' + _PPK_EOL + r'){0,8}'
 PPK_HEADER = re.compile(r'(?i)Private-Lines:[ \t]*(\d{1,3})\b')
-PPK_BREAK = re.compile(_PPK_EOL)
+PPK_BREAK = re.compile(_PPK_BREAKS)
 PPK_MAC = re.compile(
-    r'(?i)' + _PPK_EOL + r'[^\r\n]{0,64}?Private-(?:MAC|Hash):[ \t]*[0-9a-f]{0,128}'
+    r'(?i)' + _PPK_BREAKS + r'[^\r\n]{0,64}?Private-(?:MAC|Hash):[ \t]*[0-9a-f]{0,128}'
 )
 
 # Anthropic and OpenAI project and service keys have dashes and underscores
@@ -127,7 +135,7 @@ GITLAB_PAT = re.compile(r'glpat-[A-Za-z0-9_.-]{20,}')
 # every quantifier is capped so the synchronous prompt-recall hook stays fast.
 # The separator and value tail are SECRET's.
 _SUFFIX = r'(?:[0-9]{1,4}(?:_[A-Z0-9]{1,16}){0,6}|(?:_[A-Z0-9]{1,16}){1,6})'
-_SEP = r'\\?["\']?\s*[:=]\s*\\?'
+_SEP = r'\\?["\']?\s*[:=]>?\s*\\?'
 _VALUE = r'(?:"[^"\n]{6,256}"|\'[^\'\n]{6,256}\'|["\']?[^\s"\',;}]{6,})'
 SUFFIXED = re.compile(
     r'(?:API_?TOKEN|ACCESS_?TOKEN|AUTH_?TOKEN|TOKEN)' + _SUFFIX + _SEP
