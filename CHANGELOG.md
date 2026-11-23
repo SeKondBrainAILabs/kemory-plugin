@@ -3,6 +3,11 @@
 All notable changes to this project are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.17.2] — 2026-11-23
+
+### Fixed
+- **Kemory works when the plugin is installed in a folder whose path has a space.** Claude desktop installs plugins under `~/Library/Application Support/`, and the hooks, `/kemory:status` and `/kemory:login` ran that path unquoted, so the shell split it at the space. Every hook failed there, so prompt recall, session context and session capture did nothing, and both commands stopped with "no such file or directory". The paths are now quoted.
+
 ## [0.17.1] — 2026-11-23
 
 ### Changed
