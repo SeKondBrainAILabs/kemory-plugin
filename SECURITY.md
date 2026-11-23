@@ -26,7 +26,9 @@ AWS access key ids, `SECRET…KEY=` assignments such as `AWS_SECRET_ACCESS_KEY=`
 suffix such as `SECRET_KEY_BASE=`, `DB_PASSWORD_PROD=` and `PASSWORD2=`, and the
 password in
 `scheme://user:pass@host` URLs) before upload, and replaces whole PEM, OpenSSH
-and PGP private-key blocks, from the BEGIN line to the END line. This is
+and PGP private-key blocks, from the BEGIN line to the END line, and the
+private part of PuTTY `.ppk` keys, from the `Private-Lines` header through the
+`Private-MAC` line (a `.ppk` file has no BEGIN line). This is
 pattern-matching, not a guarantee — a novel or unusual secret format can pass
 through, and so can a URL password that contains an unencoded `/`, `?` or `#`,
 a lower-case suffixed name (`db_password_prod:`), a name with more than 6 suffix

@@ -25,6 +25,13 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib.sh disable=SC1091
 . "$DIR/lib.sh"
 
+# mtime of a stamp file, or $2 if it cannot be read. GNU form first: on GNU
+# stat `-f` means filesystem status, prints a dump and exits 1, which would
+# poison the arithmetic callers do with the result. BSD stat rejects `-c`.
+stamp_mtime() {
+  stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null || echo "$2"
+}
+
 # Deliberately short. The long standing instruction in the docs is long
 # because it is compensating for the absence of mechanisms: recall it cannot
 # trigger, a write it cannot enforce. Those are hooks now (prompt-recall.sh,
@@ -67,7 +74,7 @@ find_pasted_instruction() {
   if [ -f "$stamp" ]; then
     local now age
     now=$(date +%s)
-    age=$(( now - $(stat -f %m "$stamp" 2>/dev/null || stat -c %Y "$stamp" 2>/dev/null || echo "$now") ))
+    age=$(( now - $(stamp_mtime "$stamp" "$now") ))
     [ "$age" -lt 604800 ] && return 0   # a week; this is housekeeping, not a fault
   fi
 
@@ -113,7 +120,7 @@ find_stale_version() {
   if [ -f "$stamp" ]; then
     local now age
     now=$(date +%s)
-    age=$(( now - $(stat -f %m "$stamp" 2>/dev/null || stat -c %Y "$stamp" 2>/dev/null || echo "$now") ))
+    age=$(( now - $(stamp_mtime "$stamp" "$now") ))
     [ "$age" -lt 86400 ] && return 0
   fi
 
@@ -184,7 +191,7 @@ emit_setup_hint() {
   if [ -f "$stamp" ]; then
     local now age
     now=$(date +%s)
-    age=$(( now - $(stat -f %m "$stamp" 2>/dev/null || stat -c %Y "$stamp" 2>/dev/null || echo "$now") ))
+    age=$(( now - $(stamp_mtime "$stamp" "$now") ))
     [ "$age" -lt 86400 ] && exit 0
   fi
   mkdir -p "$(dirname "$stamp")" 2>/dev/null && touch "$stamp" 2>/dev/null
@@ -301,7 +308,7 @@ if [ -n "$grok_disabled" ]; then
   fresh=1
   if [ -f "$stamp" ]; then
     now=$(date +%s)
-    age=$(( now - $(stat -f %m "$stamp" 2>/dev/null || stat -c %Y "$stamp" 2>/dev/null || echo "$now") ))
+    age=$(( now - $(stamp_mtime "$stamp" "$now") ))
     [ "$age" -lt 86400 ] && fresh=0
   fi
   if [ "$fresh" -eq 1 ]; then

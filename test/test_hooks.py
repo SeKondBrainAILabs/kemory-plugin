@@ -517,6 +517,26 @@ class HookTest(LocalServerTest):
         self.assertIn("- turn 0 work", content)
         self.assertIn("after image", content)
 
+    def test_capture_reads_only_text_parts(self):
+        Recorder.posts.clear()
+        lines = [json.dumps({"type": "user", "message": {"content": content}}) for content in (
+            [{"type": "tool_result", "text": "tool noise"},
+             {"type": "text", "text": "real words"}],
+            [{"text": "untyped noise"}, {"type": "text", "text": "typed words"}],
+            [{"type": "text", "text": "alpha"}, {"type": "image", "source": {}},
+             {"type": "text", "text": "beta"}],
+        )]
+        self.run_script("capture.sh",
+                        {"session_id": "textparts", "hook_event_name": "SessionEnd",
+                         "transcript_path": self.raw_transcript(lines)},
+                        KEMORY_API_KEY="k")
+        self.assertEqual(len(Recorder.posts), 1)
+        content = Recorder.posts[0][1]["content"]
+        turns = content.splitlines()
+        for expected in ("- real words", "- typed words", "- alpha beta"):
+            self.assertIn(expected, turns)
+        self.assertNotIn("noise", content)
+
     # --- standing instruction (SessionStart) -------------------------------
     INSTRUCTION_MARK = "Kemory is this user's persistent memory"
 
@@ -1396,6 +1416,99 @@ class HookTest(LocalServerTest):
         self.assertNotIn(short, content)
         self.assertIn("what is wrong?", content)
 
+    # Fake PuTTY key material only: the repo is public.
+    PPK_PUBLIC = "AAAAB3NzaC1yc2EAAAADAQAB"
+    PPK_LINE = "AAAAgQC" + "q" * 57
+    PPK_LAST = "Zz9Yy8Xx"
+
+    def _ppk(self, version="3", encrypted=False, mac=True, eol="\n", prefix=""):
+        lines = [
+            f"PuTTY-User-Key-File-{version}: ssh-rsa",
+            "Encryption: aes256-cbc" if encrypted else "Encryption: none",
+            "Comment: k",
+            "Public-Lines: 1",
+            self.PPK_PUBLIC,
+        ]
+        if encrypted:
+            lines += ["Key-Derivation: Argon2id", "Argon2-Memory: 8192",
+                      "Argon2-Passes: 13", "Argon2-Parallelism: 1",
+                      "Argon2-Salt: " + "ab" * 16]
+        lines += ["Private-Lines: 3", self.PPK_LINE, self.PPK_LINE, self.PPK_LAST]
+        if mac:
+            lines.append("Private-MAC: " + "0" * (64 if version == "3" else 40))
+        return eol.join(prefix + line for line in lines)
+
+    def test_capture_redacts_a_putty_private_key(self):
+        # PuTTY .ppk keys have no BEGIN line; the secret is the Private-Lines body.
+        body = "AAAAgQC" + "q" * 57
+        ppk = ("PuTTY-User-Key-File-3: ssh-rsa\nEncryption: none\nComment: k\n"
+               "Public-Lines: 1\nAAAAB3NzaC1yc2EAAAADAQAB\nPrivate-Lines: 2\n"
+               f"{body}\n{body}\nPrivate-MAC: " + "0" * 64)
+        content = self._captured(f"why does this key fail: {ppk}")
+        self.assertNotIn(body, content)
+
+    def test_capture_redacts_every_putty_key_version(self):
+        cases = {
+            "v3": (self._ppk() + " thanks", " thanks"),
+            "v3 encrypted": (self._ppk(encrypted=True) + " thanks", " thanks"),
+            "v2": (self._ppk(version="2") + " thanks", " thanks"),
+            "v3 truncated": (self._ppk(mac=False) + "\nwhat is wrong?",
+                             "what is wrong?"),
+        }
+        for name, (fixture, tail) in cases.items():
+            with self.subTest(version=name):
+                content = self._captured("help: " + fixture)
+                self.assertNotIn(self.PPK_LINE, content)
+                self.assertNotIn(self.PPK_LAST, content)
+                self.assertIn(self.PPK_PUBLIC, content)
+                self.assertEqual(content.count("[REDACTED]"), 1)
+                self.assertIn(tail, content)
+                if name == "v3 encrypted":
+                    self.assertIn("Argon2-Salt: ", content)
+
+    PPK_PREFIXES = ["", "  ", " " * 8, " " * 40, "\t", "> ", "# ", "// ", "- ",
+                    "* ", " * ", "| ", "    | ", ";; ", "-- ", "% ", "1: "]
+    # LF, CRLF, single-escaped (JSON in a prompt) and double-escaped (JSON in
+    # JSON) \n and \r\n.
+    PPK_EOLS = ["\n", "\r\n", "\\n", "\\r\\n", "\\\\n", "\\\\r\\\\n"]
+
+    def test_capture_redacts_putty_keys_under_any_line_prefix(self):
+        # The pass counts lines from the Private-Lines header, so what a paste
+        # puts in front of each line (indent, quote, list or comment marker, line
+        # number) cannot hide the body.
+        for eol in self.PPK_EOLS:
+            for mac in (True, False):
+                with self.subTest(eol=eol, mac=mac):
+                    keys = []
+                    for p in self.PPK_PREFIXES:
+                        tail = " thanks" if mac else eol + p + "what is wrong?"
+                        keys.append(self._ppk(eol=eol, prefix=p, mac=mac) + tail)
+                    content = self._captured("help: " + eol.join(keys))
+                    self.assertNotIn(self.PPK_LINE, content)
+                    self.assertNotIn(self.PPK_LAST, content)
+                    n = len(self.PPK_PREFIXES)
+                    self.assertEqual(content.count(self.PPK_PUBLIC), n)
+                    self.assertEqual(content.count("[REDACTED]"), n)
+                    self.assertEqual(
+                        content.count(" thanks" if mac else "what is wrong?"), n)
+
+    def test_putty_count_overreach_is_bounded(self):
+        # The pass takes the header's N lines whatever they hold, so prose that
+        # says 'Private-Lines: N' and a paste cut off mid-body lose more than the
+        # key. It over-redacts these on purpose rather than leak a body.
+        with self.subTest(case="prose"):
+            content = self._captured(
+                "set Private-Lines: 2 in the header\nnext line\nthird\nfourth line")
+            self.assertIn("fourth line", content)
+            self.assertNotIn("next line", content)
+            self.assertNotIn("third", content)
+        with self.subTest(case="cut off"):
+            content = self._captured(
+                "help: Private-Lines: 3\n" + self.PPK_LINE
+                + "\nwhat is wrong?\nmore\nkeep this")
+            self.assertNotIn(self.PPK_LINE, content)
+            self.assertIn("keep this", content)
+
     # --- rate reminder ----------------------------------------------------
     def test_reminder_silent_on_empty_recall(self):
         r = self.run_script("rate-reminder.sh",
@@ -1840,6 +1953,34 @@ class HookTest(LocalServerTest):
         self.assertIn("[REDACTED]", query)
         for line in self.KEY_BODY:
             self.assertNotIn(line, query)
+
+    def test_prompt_recall_redacts_a_putty_private_key(self):
+        self.recall(prompt="why does this key fail: " + self._ppk())
+        query = self.searches()[0]["query"]
+        self.assertIn("[REDACTED]", query)
+        self.assertNotIn(self.PPK_LINE, query)
+        self.assertNotIn(self.PPK_LAST, query)
+
+    def test_putty_redaction_is_bounded(self):
+        # The synchronous recall hook has a 10 s timeout. These are the shapes a
+        # header-driven pass could be slow on: many headers back to back, one
+        # header with a huge count and no line break, and a long body repeated.
+        # Each payload must stay under 128 KB: prompt-recall.sh exports it as
+        # HOOK_INPUT and exec refuses a larger environment string, so the hook
+        # would fail open and send no search.
+        prompts = {
+            "many headers": "Private-Lines: 1\n" * 6000,
+            "no line break": "Private-Lines: 999 " * 6000,
+            "long body twice": ("Private-Lines: 1\n" + ("A" * 64 + "\n") * 600) * 2,
+        }
+        for name, prompt in prompts.items():
+            with self.subTest(shape=name):
+                Recorder.posts.clear()
+                start = time.monotonic()
+                self.recall(prompt=prompt)
+                elapsed = time.monotonic() - start
+                self.assertLess(elapsed, 5, f"recall took {elapsed:.1f}s")
+                self.assertTrue(self.searches(), "the hook never reached the search")
 
     def test_prompt_recall_silent_on_short_prompt(self):
         self.assertEqual(self.recall(prompt="ok").stdout.strip(), "")
@@ -2464,6 +2605,22 @@ class CredentialTest(LocalServerTest):
                                          "prompt": "where does the kemory plugin keep its credential?"}))
         sent = [h.get("X-Organization-ID") for h, _, _ in Recorder.posts]
         self.assertTrue(sent, "prompt recall made no request")
+        self.assertEqual(set(sent), {"org-b"})
+
+    def test_capture_sends_the_selected_organisation(self):
+        self.write_creds(expires_at=time.time() + 3600, active_org_id="org-b")
+        transcript = pathlib.Path(self.home) / "session.jsonl"
+        transcript.write_text(json.dumps(
+            {"type": "user", "message": {"content": "add retries to the upload"}}) + "\n")
+        e = clean_env()
+        e["HOME"] = self.home
+        run_with_timeout([str(SCRIPTS / "capture.sh")], text=True,
+                       capture_output=True, env=e, timeout=30,
+                       input=json.dumps({"session_id": "s", "hook_event_name": "SessionEnd",
+                                         "reason": "other", "transcript_path": str(transcript)}))
+        sent = [h.get("X-Organization-ID") for h, _, path in Recorder.posts
+                if path == "/api/v1/memories"]
+        self.assertTrue(sent, "capture made no request")
         self.assertEqual(set(sent), {"org-b"})
 
     def test_live_token_is_not_refreshed(self):
@@ -3245,7 +3402,9 @@ class StaleVersionNoticeTest(LocalServerTest):
     def test_throttled_to_once_a_day(self):
         self.marketplace("99.0.0")
         self.assertIn("available", self.message(self.run_session_start()))
-        self.assertNotIn("available", self.message(self.run_session_start()),
+        second = self.run_session_start()
+        self.assertEqual(second.returncode, 0, second.stderr)
+        self.assertNotIn("available", self.message(second),
                          "a notice every session is nagging, not informing")
 
     def test_quiet_flag_silences_it(self):
@@ -5404,14 +5563,14 @@ PY_FROM_IMPORT_PATTERN = re.compile(r"\bfrom\s+([A-Za-z_][\w.]*)\s+import\b")
 PY_IMPORT_PATTERN = re.compile(r"(?:^|[;'\"\s])import\s+([A-Za-z_][\w.]*(?:\s*,\s*[A-Za-z_][\w.]*)*)", re.M)
 EXEC_PATTERN = re.compile(r"\bexec\s+(?:python3\s+)?(\S+)")
 REPO_PATH_PATTERN = re.compile(r"(?<![\w.-])((?:\.\./)*(?:scripts|test)/[\w./-]+)")
-ALLOWED_IMPORTS = {"redact", "muse_log", "kemory_lib"}
+ALLOWED_IMPORTS = {"redact", "muse_log", "transcript", "hook_request", "kemory_lib"}
 ALLOWED_EXEC_COMMANDS = {"kemory"}
 
 
 def plugin_dependency_violations(name, text, siblings):
     """Dependencies of one plugin/scripts file that CLAUDE.md does not allow.
 
-    A file may source lib.sh, import the standard library, redact and muse_log, exec a
+    A file may source lib.sh, import the standard library, redact, muse_log, transcript and hook_request, exec a
     sibling entry file (or the kemory CLI), and name no path in the repo's own
     scripts/ or test/, which do not ship. `siblings` is the set of file names
     in plugin/scripts, so `scripts/mcp.sh` in a comment is read as the plugin's.
@@ -5458,6 +5617,34 @@ class PluginDependencyTest(unittest.TestCase):
         defining = [path.name for path in sorted(SCRIPTS.iterdir())
                     if path.is_file() and "def muse_session_log" in path.read_text(errors="replace")]
         self.assertEqual(defining, ["muse_log.py"])
+
+    def test_transcript_parsing_is_defined_once(self):
+        defs = ("def records(", "def blocks(", "def text(", "def intent(",
+                "def content(", "def muse_event(")
+        for path in sorted(SCRIPTS.iterdir()):
+            if path.is_file() and path.name != "transcript.py":
+                for line in path.read_text(errors="replace").splitlines():
+                    self.assertFalse(line.startswith(defs), f"{path.name} defines {line}")
+        for name in ("capture.py", "store_nudge.py"):
+            source = (SCRIPTS / name).read_text()
+            self.assertNotIn("json.loads(line", source, name)
+            self.assertNotIn('"Caveat:"', source, name)
+            lines = source.splitlines()
+            self.assertIn("import transcript as tlog  # noqa: E402", lines, name)
+            # The hooks bind a str named transcript; a bare import would be rebound.
+            for line in lines:
+                self.assertIsNone(re.match(r"^\s*import transcript\s*(#.*)?$", line), name)
+                self.assertIsNone(re.match(r"^\s*from transcript import", line), name)
+
+    def test_request_guard_is_defined_once(self):
+        defining = [path.name for path in sorted(SCRIPTS.iterdir())
+                    if path.is_file() and "non-HTTP scheme" in path.read_text(errors="replace")]
+        self.assertEqual(defining, ["hook_request.py"])
+
+    def test_env_int_is_defined_once(self):
+        defining = [path.name for path in sorted(SCRIPTS.iterdir())
+                    if path.is_file() and "def env_int" in path.read_text(errors="replace")]
+        self.assertEqual(defining, ["hook_request.py"])
 
     def test_scanner_reports_a_source_of_another_file(self):
         self.assertEqual(
@@ -5511,6 +5698,97 @@ class PluginDependencyTest(unittest.TestCase):
             self.assertIsNone(self.EMBEDDED_PYTHON.search(line), line)
 
 
+class ShCoverageTest(unittest.TestCase):
+    """scripts/sh_coverage_env.sh and scripts/sh_coverage.py on a fixture script."""
+
+    ENV_FILE = ROOT / "scripts" / "sh_coverage_env.sh"
+    REPORTER = ROOT / "scripts" / "sh_coverage.py"
+    FIXTURE = (
+        "#!/usr/bin/env bash\n"            # 1
+        "# a comment\n"                    # 2
+        "greet() {\n"                      # 3
+        "  echo hello\n"                   # 4
+        "}\n"                              # 5
+        "if [ \"$1\" = yes ]; then\n"      # 6
+        "  echo taken\n"                   # 7
+        "else\n"                           # 8
+        "  echo untaken\n"                 # 9
+        "fi\n"                             # 10
+        "cat <<EOF\n"                      # 11
+        "heredoc body\n"                   # 12
+        "EOF\n"                            # 13
+        "greet\n"                          # 14
+        "read -r x <<< \"$1\"\n"           # 15 (here-string, not a heredoc)
+        "if [ \"$x\" = no ]; then\n"       # 16
+        "  echo never\n"                  # 17
+        "fi\n"                            # 18
+    )
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.root = pathlib.Path(self.tmp) / "repo"
+        scripts = self.root / "plugin" / "scripts"
+        scripts.mkdir(parents=True)
+        self.script = scripts / "fixture.sh"
+        self.script.write_text(self.FIXTURE)
+        self.script.chmod(0o755)
+        self.traces = pathlib.Path(self.tmp) / "traces"
+        self.traces.mkdir()
+
+    def run_fixture(self, env_extra):
+        env = {k: v for k, v in os.environ.items()
+               if k not in ("BASH_ENV", "SHCOV_DIR")}
+        env.update(env_extra)
+        return run_with_timeout([str(self.script), "yes"], env=env,
+                                capture_output=True, text=True)
+
+    def report(self):
+        env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
+        return run_with_timeout(
+            [sys.executable, "-I", str(self.REPORTER), str(self.traces), str(self.root)],
+            env=env, capture_output=True, text=True)
+
+    def row(self, out):
+        return next(line for line in out.splitlines() if line.startswith("fixture.sh"))
+
+    def test_report_marks_taken_branch_hit_and_untaken_branch_missing(self):
+        done = self.run_fixture({"BASH_ENV": str(self.ENV_FILE),
+                                 "SHCOV_DIR": str(self.traces)})
+        self.assertEqual(done.returncode, 0, done.stderr)
+        rep = self.report()
+        self.assertEqual(rep.returncode, 0, rep.stderr)
+        row = self.row(rep.stdout)
+        # Executable: 4, 6, 7, 9, 11, 14, 15, 16, 17 (the else line, heredoc body
+        # and terminator, comment, shebang and braces are not counted; the
+        # here-string on 15 must not swallow 16-17). Missing: 9, 17.
+        self.assertRegex(row, r"\b9\s+7\b")
+        self.assertTrue(row.rstrip().endswith("9, 17"), row)
+        self.assertIn("heuristic", rep.stdout)
+        self.assertIn("TOTAL", rep.stdout)
+
+    def test_unset_shcov_dir_leaves_output_and_status_unchanged(self):
+        plain = self.run_fixture({})
+        traced = self.run_fixture({"BASH_ENV": str(self.ENV_FILE)})
+        self.assertEqual((traced.stdout, traced.stderr, traced.returncode),
+                         (plain.stdout, plain.stderr, plain.returncode))
+        self.assertEqual(list(self.traces.iterdir()), [])
+
+    def test_garbage_trace_lines_do_not_crash_the_reporter(self):
+        (self.traces / "1.trace").write_text(
+            "+@SHCOV@no-line-number\n"
+            "+@SHCOV@fixture.sh:abc: \n"
+            "+@SHCOV@\n"
+            "\x00\xff not a trace line\n"
+            "+@SHCOV@./fixture.sh:4: echo hello\n"
+            "+@SHCOV@/elsewhere/other.sh:4: ignored\n")
+        rep = self.report()
+        self.assertEqual(rep.returncode, 0, rep.stderr)
+        self.assertNotIn("Traceback", rep.stderr)
+        self.assertNotIn("other.sh", rep.stdout)
+        self.assertRegex(self.row(rep.stdout), r"\b1\b")
+
+
 class SubprocessTimeoutTest(unittest.TestCase):
     def test_every_subprocess_call_in_this_file_is_bounded(self):
         path = pathlib.Path(__file__)
@@ -5544,6 +5822,37 @@ class SubprocessTimeoutTest(unittest.TestCase):
             with self.assertRaises(subprocess.TimeoutExpired):
                 run_with_timeout([str(script)], capture_output=True)
         self.assertLess(time.monotonic() - start, 10)
+
+
+class HintStampExpiryTest(unittest.TestCase):
+    """A once-a-day hint stamp must expire, and reading it must not crash the hook."""
+
+    def setUp(self):
+        self.home = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.home, ignore_errors=True)
+
+    def run_session_start(self):
+        e = clean_env(drop_entrypoint=True)
+        e.update({"HOME": self.home, "KEMORY_URL": "http://127.0.0.1:1"})
+        return run_with_timeout([str(SCRIPTS / "session-start.sh")], input="{}",
+                                text=True, capture_output=True, env=e)
+
+    def test_setup_hint_returns_after_its_stamp_is_a_day_old(self):
+        first = self.run_session_start()
+        self.assertIn("no credential", json.loads(first.stdout)["systemMessage"])
+        stamp = pathlib.Path(self.home) / ".kemory" / ".setup-hint"
+        old = time.time() - 2 * 86400
+        os.utime(stamp, (old, old))
+        second = self.run_session_start()
+        self.assertEqual(second.returncode, 0, second.stderr)
+        self.assertIn("no credential", json.loads(second.stdout or "{}").get("systemMessage", ""))
+
+    def test_second_run_inside_the_window_exits_zero_and_stays_quiet(self):
+        self.run_session_start()
+        second = self.run_session_start()
+        self.assertEqual(second.returncode, 0, second.stderr)
+        self.assertNotIn("unbound variable", second.stderr)
+        self.assertNotIn("no credential", second.stdout)
 
 
 if __name__ == "__main__":

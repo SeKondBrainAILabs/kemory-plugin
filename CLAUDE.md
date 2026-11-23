@@ -21,9 +21,13 @@ Layers, from the host inward:
 3. **Shared code**: `plugin/scripts/lib.sh` (bash, sourced; credential resolution via
    `kemory_resolve_auth`, which runs `kemory_creds.py`; its other helpers run
    `kemory_lib.py`) and `plugin/scripts/redact.py` (imported by `capture.py` and
-   `prompt_recall.py`) and `plugin/scripts/muse_log.py` (imported by `capture.py` and
-   `store_nudge.py`). Each is one copy on purpose, so both paths redact alike and share
-   one session-id guard.
+   `prompt_recall.py`) and `plugin/scripts/muse_log.py` and `plugin/scripts/transcript.py`
+   (each imported by `capture.py` and `store_nudge.py`; the latter as `tlog`, because
+   both hooks name their transcript path variable `transcript`) and
+   `plugin/scripts/hook_request.py` (imported by `capture.py` and `prompt_recall.py`).
+   Each is one copy on purpose, so both paths redact alike, read a transcript the same
+   way, share one session-id guard and share the check that decides where the
+   credential goes.
 4. **Entry scripts**: `mcp.sh` runs `kemory mcp serve` or `mcp_bridge.py`
    (the `exec` lines in `mcp.sh`); `login.sh` runs `login.py`; `status.sh` is behind
    `/kemory:status` and runs `status.py`.
@@ -34,7 +38,7 @@ Layers, from the host inward:
 Dependency rules:
 
 - A plugin script may depend only on `lib.sh`, `kemory_creds.py`, `kemory_lib.py`,
-  `redact.py`, `muse_log.py` and its own sibling program file (`capture.py`,
+  `redact.py`, `muse_log.py`, `transcript.py`, `hook_request.py` and its own sibling program file (`capture.py`,
   `prompt_recall.py`, `rate_reminder.py`, `session_start.py`, `status.py`,
   `store_nudge.py`, `login.py`, `mcp_bridge.py`). `lib.sh` runs `kemory_creds.py` and
   `kemory_lib.py`.
@@ -141,6 +145,16 @@ repo: `check.sh`'s `find` loops would walk it. `.coveragerc` reads `PY_CHECK_ROO
 by the script) for absolute paths, because hooks run from other working directories.
 A test that builds its child environment without `PATH` or `COVERAGE_*` is not
 measured; that is expected.
+
+`./scripts/sh_coverage.sh [ClassName]` prints line coverage for `plugin/scripts/*.sh`,
+which coverage.py cannot see. It is opt-in: CI and `check.sh` do not run it. It runs
+`test/test_hooks.py` (or just the named class) with bash xtrace switched on through
+`BASH_ENV` (`scripts/sh_coverage_env.sh`), so a test whose child environment drops
+`BASH_ENV` or `SHCOV_DIR` is not measured. `scripts/sh_coverage.py` turns the traces
+into a per-file table with missing line ranges. The executable-line count is a
+heuristic, so the percentages are approximate. It exits with the test suite's status
+and gates on no figure. Traces hold expanded values, such as the tests' fake tokens, in
+a temp dir deleted on exit: never point it at real credentials.
 
 The "python lint (ruff)" step runs `ruff check .` (B, E4, E7, E9 and F rules, `ruff.toml`). It uses
 a `ruff` on PATH only if it is 0.17.5, else `pipx run --spec ruff==0.17.5 ruff`, which is

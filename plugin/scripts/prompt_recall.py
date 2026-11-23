@@ -7,6 +7,7 @@ import urllib.request
 
 sys.path.insert(0, os.environ["KEMORY_SCRIPT_DIR"])
 from redact import redact  # noqa: E402
+from hook_request import env_int, request_setup  # noqa: E402
 
 # The server caps `query` at 1000 chars (MemorySearchRequest); a longer one is
 # a 422, not a truncated search.
@@ -35,25 +36,7 @@ def env_float(name, default):
         return default
 
 
-def env_int(name, default):
-    try:
-        return int(os.environ[name])
-    except (KeyError, ValueError):
-        return default
-
-
-try:
-    url = os.environ["KEMORY_BASE_URL"]
-    auth_name, _, auth_value = os.environ["KEMORY_AUTH_HEADER"].partition(": ")
-    # The organisation `kemory use` selected, as the CLI sends it (lib.sh).
-    org_name, _, org_value = os.environ.get("KEMORY_ORG_HEADER", "").partition(": ")
-    hook = json.loads(os.environ["HOOK_INPUT"])
-except Exception:
-    die()
-if not url or not auth_value:
-    die()
-if not url.startswith(("http://", "https://")):
-    die()  # never send a credential to a non-HTTP scheme
+url, headers, hook = request_setup()
 
 prompt = (hook.get("prompt") or "").strip()
 session_id = hook.get("session_id") or ""
@@ -93,8 +76,7 @@ if namespace:
 req = urllib.request.Request(
     url + "/api/v1/memories/search",
     data=json.dumps(body).encode(),
-    headers={auth_name: auth_value, **({org_name: org_value} if org_value else {}),
-             "Content-Type": "application/json"},
+    headers=headers,
     method="POST",
 )
 try:
