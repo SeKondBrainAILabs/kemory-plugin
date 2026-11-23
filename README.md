@@ -140,23 +140,28 @@ a self-hosted instance is reached through the URL that file records.
 
 ### Which surface you are on
 
-**Claude Code** and **Claude Desktop** are different products, and only one of
-them has plugins at all. The one that trips people is the middle row: the
-plugin works there, the command to manage it does not.
+**Claude Code** and **Claude Desktop** are different products. Claude Code has
+plugins everywhere it runs. Claude Desktop has them only in Cowork, its agent
+mode, and not in its chat. The rows that trip people are the second and third:
+the plugin works there, but `/plugin` does not.
 
 | Surface | Plugin (tools + hooks) | `/plugin` | How to install |
 |---|---|---|---|
 | Claude Code — terminal | yes | yes | `/plugin install kemory@kemory`, then `/reload-plugins` |
 | Claude Code — Desktop app, IDE extensions | yes | **no** | `claude plugin marketplace add SeKondBrainAILabs/kemory-plugin && claude plugin install kemory@kemory` in a shell, then restart the app fully |
-| Claude Desktop (the chat app) | **no plugins, no hooks** | — | `kemory mcp install --host claude-desktop`, or the Kemory connector |
+| Claude Desktop — Cowork (agent mode) | yes | **no** | Install "Kemory Plugin" from the Claude plugin directory. It runs the version listed there, which can trail this repository's release |
+| Claude Desktop — chat | **no plugins, no hooks** | — | `kemory mcp install --host claude-desktop`, or the Kemory connector |
 
 The Desktop app and the IDE extensions read the same `~/.claude/plugins` as the
 terminal, which is why installing from a shell is enough for them.
 
-Claude Desktop is a different application with no plugin system: it takes MCP
-servers through its own config, so you get the memory *tools* there and none of
-the hooks. Claude Code on the web cannot install plugins either, and claude.ai
-chat has no hooks — use the Kemory connector on both.
+Claude Desktop's chat has no plugin system: it takes MCP servers through its
+own config, so you get the memory *tools* there and none of the hooks. Cowork
+installs plugins under `~/Library/Application Support/Claude/`, a path with a
+space. Kemory's hooks and commands work there from 0.17.2, so Cowork needs the
+directory's listing at 0.17.2 or later. Claude Code on the web cannot
+install plugins either, and claude.ai chat has no hooks — use the Kemory
+connector on both.
 
 ### Cursor
 
@@ -168,12 +173,13 @@ including why it should not be combined with `kemory connect --host cursor`.
 
 ### Other tools
 
-This plugin runs where a host loads plugin hooks: Claude Code, Grok Build and Muse Code.
-Codex, Claude Desktop and other MCP clients do not load these hooks,
+This plugin runs where a host loads plugin hooks: Claude Code, Claude Desktop's
+Cowork, Grok Build and Muse Code. Codex, Claude Desktop's chat and other MCP
+clients do not load these hooks,
 so they get Kemory's memory *tools* over MCP, without prompt recall, capture
 or the in-app panel:
 
-- **claude.ai, Claude Desktop, ChatGPT and other apps with connectors:** add
+- **claude.ai, Claude Desktop's chat, ChatGPT and other apps with connectors:** add
   the Kemory connector in that app's connector settings.
 - **Continue, Warp:** `kemory mcp install --host continue` (or `warp`,
   `all`) writes the MCP entry for you.
