@@ -3,6 +3,32 @@
 All notable changes to this project are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.17.1] — 2026-11-23
+
+### Changed
+- `scripts/check.sh` now runs shellcheck on every tracked shell script, including the Cursor plugin hook, when shellcheck is installed.
+- CI runs the hook test suite once per pull request instead of twice. `scripts/check.sh` skips its test step under GitHub Actions, where the workflow's own step runs it with full output.
+- **Session capture now reads only the text parts of a user message,** as the store reminder already did, so text in other part types is no longer stored. Both hooks now read the transcript through one shared module.
+
+### Fixed
+- **Overlapping capture runs for one session no longer store the same turns twice.** A Stop capture still uploading when SessionEnd or an auto PreCompact started used to produce a duplicate memory; the second run now waits for the first and stores only turns it did not.
+- **The session-start hook no longer exits 1 on Linux once a hint stamp exists.** The setup, stale-version, paste and Grok-disabled notices now come back after their day or week instead of showing once, and context injection no longer stops after the first session.
+- **kemory-panel installs and updates without a GitHub SSH key.** Its marketplace entry now points at the HTTPS clone URL. Claude Code cloned the old `github` source over SSH only, so on a machine with no SSH key for GitHub the install or update stopped with `Permission denied (publickey)`. The kemory plugin itself was not affected.
+- **`/kemory:login` now shows the active organisation when the server answers in event-stream form.** The name was silently left out, so a sign-in into an unexpected organisation went unnoticed.
+- **Session capture and prompt recall now redact a whole private-key block.** Only the `BEGIN` line of a pasted PEM, OpenSSH or PGP private key used to be replaced, so the key body was uploaded; now the block from `BEGIN` to `END` becomes one `[REDACTED]`.
+- **The hooks and /kemory:status no longer import Python modules from the current directory.** Their Python programs ran as inline code, which puts the working directory first on the module path, so a file such as json.py in a project root would have run inside every hook. They now run from files in the plugin's scripts directory.
+- **Bearer tokens in standard base64 are now redacted whole.** A token after `Bearer ` containing `+`, `/`, `~` or `=` padding was sent unredacted, or with its tail unredacted, in the session digest and the prompt-recall query; rotate any such token you pasted into a prompt before this release.
+- **Basic credentials in `Authorization` headers are now redacted.** The credential after `Authorization: Basic` and `Proxy-Authorization: Basic` (plain, quoted, JSON, `curl -H`, client code, server config and `HTTP_AUTHORIZATION` env lines) was sent unredacted in the session digest and the prompt-recall query; change any password you pasted in such a header before this release.
+- **Environment-style keys and URL passwords are now redacted.** The values of `SECRET…KEY=` (such as `AWS_SECRET_ACCESS_KEY=`), `PRIVATE_KEY=`, `ACCESS_KEY=` and `AccountKey=` assignments, and the password in `scheme://user:pass@host` URLs, were sent unredacted in the session digest and the prompt-recall query; rotate any such credential you pasted before this release.
+- **Passwords and keys assigned with `=>` are redacted.** A PHP array (`'password' => '...'`), a Ruby hash (`:api_key => "..."`, `{"token"=>"..."}`) or a Perl fat comma used to send its value off the machine in clear. A JavaScript arrow function whose parameter is named like a credential (`token => token.trim()`) is now redacted too.
+- **Values after names like `SECRET_KEY_BASE=`, `GITHUB_TOKEN_RO=` and `DB_PASSWORD_PROD=` are now redacted.** They were uploaded unredacted in session digests and recall queries; rotate any such value you pasted before this release.
+- **Anthropic and OpenAI project keys are now redacted.** Keys starting sk-ant-, sk-proj- or sk-svcacct- were sent unredacted in the session digest and the prompt-recall query; rotate any such key you pasted into a prompt before this release.
+- **A double-spaced PuTTY `.ppk` paste is redacted whole.** With a blank line between lines, the redaction counted the blank lines toward the key's length and left the last private-key lines and the MAC in clear.
+- **Session capture and prompt recall now redact the private part of a pasted PuTTY `.ppk` key.** A `.ppk` file has no `BEGIN` line, so its `Private-Lines` body used to be uploaded whole; now the `Private-Lines` header, the body lines it counts and the `Private-MAC` line become one `[REDACTED]`, and the public key and comment stay.
+- **Values after a quoted key are now redacted.** A pasted JSON, YAML or Python dict line such as `"api_key": "..."` or `'password': '...'` was sent unredacted in the session digest and the prompt-recall query; rotate any such credential you pasted before this release.
+- **A quoted password or token is redacted up to its closing quote.** A comma, semicolon or space inside the quotes (`"ab,cdefgh12345"`, `"correct horse battery staple"`) used to end the redaction early and send the rest of the secret on.
+- **GitHub fine-grained, Stripe, Google and GitLab keys are now redacted.** Keys starting `github_pat_`, `sk_live_`, `rk_live_`, `sk_test_`, `rk_test_`, `AIza` or `glpat-` were sent unredacted in the session digest and the prompt-recall query; rotate any such key you pasted into a prompt before this release.
+
 ## [0.17.0] — 2026-11-10
 
 ### Added
