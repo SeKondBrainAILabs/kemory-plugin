@@ -42,7 +42,7 @@ is an optional add-on that shows that memory in Claude Code's interface.
 | | `kemory` | `kemory-panel` |
 |---|---|---|
 | What it is | Memory: the MCP server, hooks and skills | Kemory in Claude Code's interface |
-| What you get | The Kemory tools, prompt recall, session context, rate reminder, session capture, `/kemory:login`, `/kemory:status` | A status line that says whether Kemory works, the memories in context above the prompt, a card on each save and recall in the terminal, the `/kemory-panel:memories` panel (rate, delete, save the last reply, suggest memories), `/kemory-panel:remember`, `/kemory-panel:learned`, and auto-approval of read-only Kemory tools |
+| What you get | The Kemory tools, prompt recall, session context, rate reminder, session capture, `/kemory:login`, `/kemory:status` | A status line that says whether Kemory works, a brief for the repo above the prompt, a card on each save and recall in the terminal, the `/kemory-panel:memories` panel (rate, delete, save the last reply, suggest memories), `/kemory-panel:remember`, `/kemory-panel:learned`, and auto-approval of read-only Kemory tools |
 | Runs on | Claude Code, Grok Build and Muse Code | Claude Code 2.1.267 and later; older builds and Grok ignore it |
 | Needs | A Kemory account | `kemory`, whose server and credential it uses |
 | Source | This repository | [kemory-panel](https://github.com/SeKondBrainAILabs/kemory-panel) |
