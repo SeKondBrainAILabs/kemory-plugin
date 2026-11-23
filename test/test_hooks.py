@@ -1029,6 +1029,32 @@ class HookTest(LocalServerTest):
                 self.recall(prompt=f"why does {line} get a 401")
                 self.assertNotIn(value, self.searches()[0]["query"])
 
+    # '=>' assigns in PHP arrays, Ruby hashes (symbol and string keys, and
+    # Hash#inspect output with no spaces) and Perl's fat comma. The last line is
+    # JSON-escaped text; the one before it is an upper-case suffixed name.
+    FAT_ARROW_SECRETS = [
+        ("$db = ['password' => 'Tr0ub4dor-and-3'];", "Tr0ub4dor-and-3"),
+        ('{ :api_key => "kmy_live_9f8e7d6c5b4a3210" }', "kmy_live_9f8e7d6c5b4a3210"),
+        ('{"access_token"=>"q8Zr2LmN0pX4vB7cW1"}', "q8Zr2LmN0pX4vB7cW1"),
+        ("password => hunter2supersecret", "hunter2supersecret"),
+        ("DB_PASSWORD_PROD => 'Tr0ub4dor-and-3'", "Tr0ub4dor-and-3"),
+        ('{\\"secret\\" => \\"q8Zr2LmN0pX4vB7cW1\\"}', "q8Zr2LmN0pX4vB7cW1"),
+    ]
+
+    def test_capture_redacts_values_after_fat_arrow_keys(self):
+        for line, value in self.FAT_ARROW_SECRETS:
+            with self.subTest(line=line):
+                content = self._captured(line)
+                self.assertNotIn(value, content)
+                self.assertIn("[REDACTED]", content)
+
+    def test_prompt_recall_redacts_values_after_fat_arrow_keys(self):
+        for line, value in self.FAT_ARROW_SECRETS:
+            with self.subTest(line=line):
+                Recorder.posts.clear()
+                self.recall(prompt=f"why does {line} get a 401")
+                self.assertNotIn(value, self.searches()[0]["query"])
+
     # Environment-style names that end in KEY, and passwords inside connection
     # URLs. Values are built by concatenation so the repo holds no complete
     # key literal.
@@ -1491,6 +1517,22 @@ class HookTest(LocalServerTest):
                     self.assertEqual(content.count("[REDACTED]"), n)
                     self.assertEqual(
                         content.count(" thanks" if mac else "what is wrong?"), n)
+
+    def test_capture_redacts_double_spaced_putty_keys(self):
+        # A paste with a blank line between lines (an email, some chat clients)
+        # must not spend the header's line count on the blank lines: the second
+        # key line and the MAC would stay in clear. A blank line may hold spaces.
+        for eol in self.PPK_EOLS:
+            for gap in (eol + eol, eol + "  " + eol):
+                with self.subTest(eol=eol, gap=gap):
+                    content = self._captured(
+                        "help: " + self._ppk(eol=gap) + gap + "what is wrong?")
+                    self.assertNotIn(self.PPK_LINE, content)
+                    self.assertNotIn(self.PPK_LAST, content)
+                    self.assertNotIn("Private-MAC", content)
+                    self.assertIn(self.PPK_PUBLIC, content)
+                    self.assertEqual(content.count("[REDACTED]"), 1)
+                    self.assertIn("what is wrong?", content)
 
     def test_putty_count_overreach_is_bounded(self):
         # The pass takes the header's N lines whatever they hold, so prose that
@@ -1972,6 +2014,7 @@ class HookTest(LocalServerTest):
             "many headers": "Private-Lines: 1\n" * 6000,
             "no line break": "Private-Lines: 999 " * 6000,
             "long body twice": ("Private-Lines: 1\n" + ("A" * 64 + "\n") * 600) * 2,
+            "blank lines": "Private-Lines: 999\n" + (" " * 63 + "\n") * 1500,
         }
         for name, prompt in prompts.items():
             with self.subTest(shape=name):
