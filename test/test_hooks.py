@@ -1718,6 +1718,9 @@ class HookTest(LocalServerTest):
         # Claude desktop installs plugins under ~/Library/Application Support/.
         # The host substitutes the root into the command text and runs it with
         # /bin/sh, so an unquoted root splits at the space and every hook exits 127.
+        # Only the placeholder is quoted, the form Claude Code's docs give and
+        # `claude plugin validate` checks: a whole quoted path is a bare string
+        # under PowerShell, which prints it instead of failing.
         root = "/Users/x/Library/Application Support/Claude/plugin"
         hooks = json.loads((ROOT / "plugin" / "hooks" / "hooks.json").read_text())["hooks"]
         commands = [h["command"] for groups in hooks.values() for g in groups for h in g["hooks"]]
@@ -1726,6 +1729,7 @@ class HookTest(LocalServerTest):
         self.assertTrue(commands)
         for command in commands:
             with self.subTest(command=command):
+                self.assertTrue(command.startswith('"${CLAUDE_PLUGIN_ROOT}"/scripts/'))
                 argv = shlex.split(command.replace("${CLAUDE_PLUGIN_ROOT}", root))
                 self.assertEqual(len(argv), 1)
                 self.assertTrue(argv[0].startswith(root + "/scripts/"))
@@ -1788,7 +1792,7 @@ class HookTest(LocalServerTest):
         self.assertTrue(hooks)
         for hook in hooks:
             with self.subTest(command=hook["command"]):
-                self.assertTrue(hook["command"].endswith("/scripts/capture.sh\""))
+                self.assertTrue(hook["command"].endswith("/scripts/capture.sh"))
                 self.assertIs(hook.get("async"), True)
                 self.assertIn("timeout", hook)
 
@@ -5373,7 +5377,7 @@ class MusePluginTest(LocalServerTest):
     def test_events_and_scripts_match_hooks_json(self):
         hooks = json.loads((ROOT / "plugin/hooks/hooks.json").read_text())["hooks"]
         expected = sorted(
-            (event, h["command"].replace("${CLAUDE_PLUGIN_ROOT}/", "").strip('"'))
+            (event, h["command"].replace('"${CLAUDE_PLUGIN_ROOT}"/', ""))
             for event, groups in hooks.items() for g in groups for h in g["hooks"])
         found = sorted((h["event"], h["command"][1]) for h in self.manifest["capabilities"]["hooks"])
         self.assertEqual(found, expected)

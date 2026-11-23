@@ -1,11 +1,11 @@
 ---
 description: Check whether Kemory is actually working — credentials, API reachability, capture and context-injection settings
-allowed-tools: Bash("${CLAUDE_PLUGIN_ROOT}/scripts/status.sh")
+allowed-tools: Bash("${CLAUDE_PLUGIN_ROOT}"/scripts/status.sh)
 ---
 
 Run the Kemory status check and report the result to the user.
 
-!`"${CLAUDE_PLUGIN_ROOT}/scripts/status.sh"`
+!`"${CLAUDE_PLUGIN_ROOT}"/scripts/status.sh`
 
 Summarise what is working and what is not. If anything failed, give the single
 most useful next step — do not list every possible fix. Common cases:
