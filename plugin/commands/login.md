@@ -1,11 +1,11 @@
 ---
 description: Sign in to Kemory in the browser — no CLI to install, no API key to paste
-allowed-tools: Bash(${CLAUDE_PLUGIN_ROOT}/scripts/login.sh)
+allowed-tools: Bash("${CLAUDE_PLUGIN_ROOT}/scripts/login.sh")
 ---
 
 Sign the user in to Kemory.
 
-!`${CLAUDE_PLUGIN_ROOT}/scripts/login.sh`
+!`"${CLAUDE_PLUGIN_ROOT}/scripts/login.sh"`
 
 If the sign-in output is not shown above — some hosts, Grok Build among them,
 do not run that line — start `${CLAUDE_PLUGIN_ROOT}/scripts/login.sh` yourself
