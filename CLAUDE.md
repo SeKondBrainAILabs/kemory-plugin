@@ -125,6 +125,9 @@ shellcheck plugin/scripts/*.sh scripts/*.sh
 ./scripts/py_check.sh
 ```
 
+`scripts/mutate.py` is an on-demand guard-deletion check (1-2 hours in full, never in CI);
+`check.sh` runs only its self-test, `test/test_mutate.py`. See CONTRIBUTING.md "Mutation check".
+
 CI (`.github/workflows/check.yml`) runs the first three; `py_check.sh` is run by hand
 until a CI step is added for it. `check.sh` runs the test suite
 itself (except under GitHub Actions, where the workflow's own step runs it), so it takes a few minutes locally. Its "official manifest validation" step runs only
