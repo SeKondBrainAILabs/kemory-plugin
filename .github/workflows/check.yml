@@ -21,3 +21,53 @@ jobs:
         run: |
           sudo apt-get update -qq && sudo apt-get install -y shellcheck
           shellcheck plugin/scripts/*.sh scripts/*.sh
+
+  # Installs and updates every plugin in this checkout's marketplace with the
+  # real Claude Code CLI, as a user would. The runner has no GitHub SSH key, so
+  # a marketplace entry that Claude Code clones over SSH (a `github` source)
+  # fails here as it does for users without one.
+  install:
+    runs-on: ubuntu-latest
+    env:
+      CLAUDE_CODE_VERSION: 2.1.319
+      DISABLE_AUTOUPDATER: "1"
+      GIT_SSH_COMMAND: ssh -i /dev/null -o IdentitiesOnly=yes -o BatchMode=yes
+      GIT_TERMINAL_PROMPT: "0"
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - name: Install Claude Code
+        run: |
+          npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
+          claude --version
+      - name: Install, update and validate plugins
+        run: |
+          set -uo pipefail
+          export CLAUDE_CONFIG_DIR="$RUNNER_TEMP/claude-config"
+          mkdir -p "$CLAUDE_CONFIG_DIR"
+          status=0
+          # Runs every step even after a failure, so one run shows all of them.
+          step() {
+            echo "::group::claude $*"
+            # The default shell is bash -e: catch the exit status so a failure
+            # does not end the script before its output is printed.
+            rc=0
+            out=$(claude "$@" 2>&1) || rc=$?
+            printf '%s\n' "$out"
+            echo "::endgroup::"
+            if [ "$rc" -ne 0 ] || grep -qE '✘|Failed' <<<"$out"; then
+              echo "::error::claude $* failed (exit $rc)"
+              status=1
+            fi
+          }
+          step plugin marketplace add "$GITHUB_WORKSPACE"
+          step plugin install kemory@kemory
+          step plugin install kemory-panel@kemory
+          step plugin update kemory@kemory
+          step plugin update kemory-panel@kemory
+          step plugin validate "$GITHUB_WORKSPACE"
+          exit "$status"
