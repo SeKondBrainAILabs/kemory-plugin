@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/session-start.sh",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/session-start.sh\"",
             "timeout": 15,
             "statusMessage": "Loading Kemory memory context..."
           }
@@ -18,7 +18,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/prompt-recall.sh",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/prompt-recall.sh\"",
             "timeout": 10
           }
         ]
@@ -30,7 +30,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/rate-reminder.sh",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/rate-reminder.sh\"",
             "timeout": 10
           }
         ]
@@ -41,7 +41,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/capture.sh",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/capture.sh\"",
             "timeout": 15,
             "async": true
           }
@@ -51,7 +51,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/store-nudge.sh",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/store-nudge.sh\"",
             "timeout": 10
           }
         ]
@@ -62,7 +62,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/capture.sh",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/capture.sh\"",
             "timeout": 15,
             "async": true
           }
@@ -74,7 +74,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/capture.sh",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/capture.sh\"",
             "timeout": 15,
             "async": true
           }

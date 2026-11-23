@@ -15,6 +15,7 @@ import json
 import os
 import pathlib
 import re
+import shlex
 import shutil
 import signal
 import socket
@@ -1713,6 +1714,22 @@ class HookTest(LocalServerTest):
         self.assertNotIn("modules", hooks)
         self.assertFalse(list((ROOT / "plugin").rglob("*.tsx")))
 
+    def test_commands_survive_a_plugin_root_with_a_space(self):
+        # Claude desktop installs plugins under ~/Library/Application Support/.
+        # The host substitutes the root into the command text and runs it with
+        # /bin/sh, so an unquoted root splits at the space and every hook exits 127.
+        root = "/Users/x/Library/Application Support/Claude/plugin"
+        hooks = json.loads((ROOT / "plugin" / "hooks" / "hooks.json").read_text())["hooks"]
+        commands = [h["command"] for groups in hooks.values() for g in groups for h in g["hooks"]]
+        for md in sorted((ROOT / "plugin" / "commands").glob("*.md")):
+            commands += re.findall(r"^!`(.+)`$", md.read_text(), re.M)
+        self.assertTrue(commands)
+        for command in commands:
+            with self.subTest(command=command):
+                argv = shlex.split(command.replace("${CLAUDE_PLUGIN_ROOT}", root))
+                self.assertEqual(len(argv), 1)
+                self.assertTrue(argv[0].startswith(root + "/scripts/"))
+
     def test_capture_is_registered_on_stop_precompact_and_session_end(self):
         hooks = json.loads((ROOT / "plugin" / "hooks" / "hooks.json").read_text())
         for event in ("Stop", "PreCompact", "SessionEnd"):
@@ -1771,7 +1788,7 @@ class HookTest(LocalServerTest):
         self.assertTrue(hooks)
         for hook in hooks:
             with self.subTest(command=hook["command"]):
-                self.assertTrue(hook["command"].endswith("/scripts/capture.sh"))
+                self.assertTrue(hook["command"].endswith("/scripts/capture.sh\""))
                 self.assertIs(hook.get("async"), True)
                 self.assertIn("timeout", hook)
 
@@ -5356,7 +5373,7 @@ class MusePluginTest(LocalServerTest):
     def test_events_and_scripts_match_hooks_json(self):
         hooks = json.loads((ROOT / "plugin/hooks/hooks.json").read_text())["hooks"]
         expected = sorted(
-            (event, h["command"].replace("${CLAUDE_PLUGIN_ROOT}/", ""))
+            (event, h["command"].replace("${CLAUDE_PLUGIN_ROOT}/", "").strip('"'))
             for event, groups in hooks.items() for g in groups for h in g["hooks"])
         found = sorted((h["event"], h["command"][1]) for h in self.manifest["capabilities"]["hooks"])
         self.assertEqual(found, expected)
