@@ -17,8 +17,8 @@
     {
       "name": "kemory-panel",
       "source": {
-        "source": "github",
-        "repo": "SeKondBrainAILabs/kemory-panel"
+        "source": "url",
+        "url": "https://github.com/SeKondBrainAILabs/kemory-panel.git"
       },
       "description": "Kemory inside Claude Code: a status line that says whether memory works, the memories in context above the prompt, transcript cards, and a panel to review, rate, save and delete memories. Auto-approves read-only Kemory tools. Requires the kemory plugin."
     }
