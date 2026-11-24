@@ -2778,6 +2778,18 @@ class CredentialTest(LocalServerTest):
         self.assertEqual(saved["refresh_token"], "rotated-refresh")
         self.assertEqual(saved["access_token"], "fresh-token")
 
+    def test_refresh_saves_a_future_expires_at(self):
+        # An unsaved expiry leaves the old past time on disk, so every later
+        # hook refreshes again and rotates the refresh token again.
+        creds = self.write_creds()
+        Recorder.token_payload = {"access_token": "fresh-token",
+                                  "expires_in": 3600}
+        before = time.time()
+        self.assertIn("expired=0", self.resolve().stdout)
+        saved = json.loads(creds.read_text())
+        self.assertGreaterEqual(saved["expires_at"], before + 3500)
+        self.assertLessEqual(saved["expires_at"], time.time() + 3600)
+
     def test_concurrent_refreshes_leave_valid_json(self):
         creds = self.write_creds()
         e = clean_env()
