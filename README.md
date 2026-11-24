@@ -77,7 +77,8 @@ without it. Its README says what it adds and what it needs. Install it after
 | A self-hosted or community instance | `export KEMORY_URL=http://...` alongside `KEMORY_API_KEY`. One URL moves the whole plugin. |
 
 CLI install and sign-in: [docs.sekondbrain.ai/kemory/cli](https://docs.sekondbrain.ai/kemory/cli/).
-The hooks are `bash` scripts calling `curl` and `python3`; on Windows they need
+The hooks are `bash` scripts calling `curl` and `python3` (3.9 or newer, the
+version macOS ships); on Windows they need
 Git Bash or WSL, which is untested.
 
 </details>

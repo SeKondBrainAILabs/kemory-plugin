@@ -163,6 +163,24 @@ else
   echo "  FAIL ruff found problems:"; printf '%s\n' "$ruff_out" | sed 's/^/    /'; fail=1
 fi
 
+echo "→ python 3.9 compatibility (vermin)"
+# Hooks run on the user's python3 and macOS ships 3.9. Pinned like ruff above.
+# A newer-only import must be guarded and carry `# novermin` on its line.
+vermin_version=1.9.2
+vermin_cmd=()
+if command -v vermin >/dev/null 2>&1 && [ "$(vermin --version 2>/dev/null)" = "$vermin_version" ]; then
+  vermin_cmd=(vermin)
+elif command -v pipx >/dev/null 2>&1; then
+  vermin_cmd=(pipx run --spec "vermin==$vermin_version" vermin)
+fi
+if [ "${#vermin_cmd[@]}" -eq 0 ]; then
+  echo "  FAIL vermin not found (install vermin or pipx)"; fail=1
+elif vermin_out=$("${vermin_cmd[@]}" --no-tips --violations --eval-annotations -t=3.9- plugin/scripts 2>&1); then
+  echo "  ok   vermin $vermin_version, plugin/scripts runs on Python 3.9"
+else
+  echo "  FAIL vermin found code newer than Python 3.9:"; printf '%s\n' "$vermin_out" | sed 's/^/    /'; fail=1
+fi
+
 echo "→ hook behaviour tests"
 # GitHub Actions sets GITHUB_ACTIONS; its next step runs the suite with full output.
 if [ -n "${GITHUB_ACTIONS:-}" ]; then

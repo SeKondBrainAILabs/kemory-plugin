@@ -6096,5 +6096,23 @@ class HintStampExpiryTest(unittest.TestCase):
         self.assertNotIn("no credential", second.stdout)
 
 
+class MinimumPythonTest(unittest.TestCase):
+    """The hook minimum is named alike in the docs, ruff and check.sh."""
+
+    def read(self, rel: str) -> str:
+        return (ROOT / rel).read_text(encoding="utf-8")
+
+    def test_ruff_targets_py39(self):
+        self.assertRegex(self.read("ruff.toml"), r'(?m)^target-version = "py39"$')
+
+    def test_check_sh_vermin_targets_3_9(self):
+        self.assertRegex(self.read("scripts/check.sh"), r"--no-tips .*-t=3\.9- plugin/scripts")
+
+    def test_readmes_state_python_3_9(self):
+        for rel in ("README.md", "plugin/README.md"):
+            with self.subTest(file=rel):
+                self.assertRegex(self.read(rel), r"`python3` \(3\.9 or newer")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

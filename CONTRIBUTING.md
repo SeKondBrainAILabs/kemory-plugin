@@ -40,6 +40,11 @@ ruff (B, E4, E7, E9 and F rules). When `shellcheck` is on PATH it also shellchec
 every tracked `*.sh`, including `plugins/cursor/scripts/`; the separate command above
 covers only `plugin/scripts` and `scripts`.
 
+Hooks run on the user's `python3`, so the minimum is 3.9 (what macOS ships). `check.sh`
+runs vermin 1.9.2 on `plugin/scripts` against 3.9, and ruff targets py39. Exempt a
+guarded newer-only import with `# novermin` on its line, as `kemory_lib.py` does for
+`tomllib`.
+
 `py_check.sh` lints `plugin/scripts`, `scripts` and `test` with ruff, then runs the
 hook tests under coverage.py and prints coverage per file and for the credential
 code (`kemory_creds.py`). It has no coverage threshold. It keeps ruff and coverage in
