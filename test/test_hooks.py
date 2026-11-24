@@ -2969,6 +2969,55 @@ class CredentialTest(LocalServerTest):
         self.assertIn(".mcp.json", msg)
         self.assertNotIn("kemory_secret", msg)
 
+    # --- what /kemory:status prints when the hooks are dead ------------------
+    def status(self, **env):
+        e = clean_env()
+        e.update({"HOME": self.home, "CLAUDE_PROJECT_DIR": self.home,
+                  "KEMORY_URL": f"http://127.0.0.1:{self.port}"})
+        e.update(env)
+        r = run_with_timeout([str(SCRIPTS / "status.sh")], input="{}",
+                             text=True, capture_output=True, env=e)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return r.stdout
+
+    def test_status_reports_an_expired_token_that_could_not_be_refreshed(self):
+        Recorder.token_status = 500
+        self.write_creds()
+        out = self.status()
+        self.assertIn("the stored token is expired and could not be refreshed", out)
+        self.assertIn("run /kemory:login again", out)
+
+    def test_status_reports_a_corrupt_credentials_file(self):
+        d = pathlib.Path(self.home) / ".kemory"
+        d.mkdir(parents=True)
+        creds = d / "credentials-prod"
+        creds.write_text("{not json")
+        out = self.status()
+        self.assertIn(f"{creds} is not valid JSON — every hook is inert", out)
+        self.assertIn("run /kemory:login to write a fresh credential file", out)
+
+    def test_status_with_no_credential_says_how_to_sign_in(self):
+        out = self.status()
+        self.assertIn("no credential the hooks can use — every hook is inert", out)
+        self.assertIn("run /kemory:login (browser sign-in), or set KEMORY_API_KEY", out)
+        self.assertNotIn("which the hooks cannot read", out)
+
+    def test_status_names_an_api_key_that_only_the_mcp_config_holds(self):
+        self.mcp_config({"mcpServers": {"kemory": {
+            "headers": {"X-API-Key": "kemory_secret"}}}})
+        out = self.status()
+        self.assertIn("no credential the hooks can use — every hook is inert", out)
+        self.assertIn(".mcp.json, which the hooks cannot read", out)
+        self.assertIn("export that same key as KEMORY_API_KEY", out)
+        self.assertNotIn("kemory_secret", out)
+        self.assertNotIn("browser sign-in", out)
+
+    def test_status_reports_credentials_the_api_rejects(self):
+        Recorder.get_status = 401
+        self.write_creds(expires_at=time.time() + 3600)
+        out = self.status()
+        self.assertIn("API reachable but rejected the credentials (HTTP 401)", out)
+
 
 class McpEntryTest(LocalServerTest):
     """The bundled MCP server: who serves, and what happens with no credential.
