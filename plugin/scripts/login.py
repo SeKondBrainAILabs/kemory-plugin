@@ -171,12 +171,27 @@ def write_credentials(tokens: dict, issuer: str, base_url: str) -> str:
     claims = claims_of(access)
     prior = existing()
 
+    # Only the same account may inherit anything from the earlier file. The
+    # file has no `sub` (the CLI writes the same shape), so compare emails; a
+    # missing email on either side counts as a different account.
+    token_email = claims.get("email")
+    prior_email = prior.get("email")
+    same_account = (
+        isinstance(token_email, str) and isinstance(prior_email, str)
+        and bool(token_email.strip())
+        and token_email.strip().casefold() == prior_email.strip().casefold()
+    )
+    if not same_account:
+        prior = {}
+
     org_id = claims.get("org_id") or prior.get("org_id") or ""
     # `active_org_id` is NOT a token claim and is NOT always org_id: `kemory use`
     # switches it, and on a machine where it had been switched, overwriting it
     # here would silently move the user back to their default organisation —
     # which is how memories have landed in the wrong org before. Keep what is
-    # already there; only a first sign-in defaults it.
+    # already there; only a first sign-in defaults it. The kept value belongs
+    # to the account that chose it, so it is kept only when the same account
+    # signs in again; another account starts in its own org.
     active_org_id = prior.get("active_org_id") or org_id
 
     data = {
