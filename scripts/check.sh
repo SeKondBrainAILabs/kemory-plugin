@@ -148,7 +148,7 @@ done < <(jq -r '.hooks[][].hooks[].command | select(contains("CLAUDE_PLUGIN_ROOT
 # F and B rules, pinned to one ruff version so a new release cannot turn main
 # red. A PATH ruff is used only when it is that version; else pipx runs it.
 echo "→ python lint (ruff)"
-ruff_version=0.17.5
+ruff_version=0.17.6
 ruff_cmd=()
 if command -v ruff >/dev/null 2>&1 && [ "$(ruff --version 2>/dev/null)" = "ruff $ruff_version" ]; then
   ruff_cmd=(ruff)

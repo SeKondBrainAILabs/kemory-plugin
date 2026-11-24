@@ -219,6 +219,16 @@ def clean_env(drop_entrypoint=False):
             and not (drop_entrypoint and k == "CLAUDE_CODE_ENTRYPOINT")}
 
 
+def coverage_env():
+    """The variables coverage.py needs in a child that gets a hand-built environment.
+
+    Tests that start a hook from scratch must pass these on, or py_check.sh
+    cannot measure the scripts they run.
+    """
+    return {k: v for k, v in os.environ.items()
+            if k.startswith("COVERAGE_") or k == "PY_CHECK_ROOT"}
+
+
 # Recorder's fields are class attributes shared by every class using it. They
 # are read from vars(), not dir(), which also lists BaseHTTPRequestHandler's own.
 RECORDER_DEFAULTS = {
@@ -413,6 +423,47 @@ class HookTest(LocalServerTest):
         _, body, _path = Recorder.posts[0]
         turn_text = body["content"].split("\n\n")[-1]
         self.assertEqual(len(turn_text), 8000)
+
+    def _capture_burst(self, count, **env):
+        t = self.transcript(*[f"burst-turn-{i:02d}" for i in range(1, count + 1)])
+        self.run_script("capture.sh", {"session_id": "s", "transcript_path": t},
+                        KEMORY_API_KEY="k", KEMORY_AUTO_CAPTURE="1", **env)
+        self.assertEqual(len(Recorder.posts), 1)
+        _, body, _path = Recorder.posts[0]
+        return body
+
+    def test_capture_posts_only_the_newest_12_turns_by_default(self):
+        body = self._capture_burst(15)
+        self.assertEqual(body["metadata"]["turns"], 12)
+        self.assertIn("turns 4-15)", body["content"])
+        for dropped in ("01", "02", "03"):
+            self.assertNotIn(f"burst-turn-{dropped}", body["content"])
+        self.assertIn("burst-turn-04", body["content"])
+        self.assertIn("burst-turn-15", body["content"])
+
+    def test_capture_max_turns_env_bounds_the_posted_turns(self):
+        body = self._capture_burst(8, KEMORY_CAPTURE_MAX_TURNS="3")
+        self.assertEqual(body["metadata"]["turns"], 3)
+        self.assertIn("turns 6-8)", body["content"])
+        self.assertNotIn("burst-turn-05", body["content"])
+        self.assertIn("burst-turn-06", body["content"])
+
+    def test_capture_window_label_counts_from_the_captured_mark(self):
+        t = self.transcript("burst-turn-01", "burst-turn-02", "burst-turn-03")
+        args = {"session_id": "s", "transcript_path": t}
+        kw = {"KEMORY_API_KEY": "k", "KEMORY_AUTO_CAPTURE": "1",
+              "KEMORY_CAPTURE_MAX_TURNS": "3"}
+        self.run_script("capture.sh", args, **kw)
+        with open(t, "a") as f:
+            for i in range(4, 9):
+                f.write(json.dumps({"type": "user",
+                                    "message": {"content": f"burst-turn-{i:02d}"}}) + "\n")
+        self.run_script("capture.sh", args, **kw)
+        self.assertEqual(len(Recorder.posts), 2)
+        body = Recorder.posts[1][1]
+        self.assertEqual(body["metadata"]["turns"], 3)
+        self.assertIn("turns 6-8)", body["content"])
+        self.assertNotIn("burst-turn-04", body["content"])
 
     def test_capture_skips_when_legacy_bare_sha_marker_matches_digest(self):
         t = self.transcript("one task")
@@ -2101,6 +2152,17 @@ class HookTest(LocalServerTest):
         self.recall(session="a")
         self.assertIn("recalled 1", json.loads(self.recall(session="b").stdout)["systemMessage"])
 
+    def test_prompt_recall_caps_the_seen_list_at_500(self):
+        state = pathlib.Path(self.home) / ".kemory" / ".recalled"
+        state.mkdir(parents=True, exist_ok=True)
+        seen_path = state / "cap"
+        seen_path.write_text(json.dumps([f"{i:016x}" for i in range(600)]))
+        Recorder.search_payload = self._hit()
+        self.assertIn("recalled 1", json.loads(self.recall(session="cap").stdout)["systemMessage"])
+        seen = json.loads(seen_path.read_text())
+        self.assertEqual(len(seen), 500)
+        self.assertEqual(seen[0], f"{101:016x}", "the oldest entries are the ones dropped")
+
     def test_prompt_recall_shows_count_not_a_token_estimate(self):
         # recall_log.count_injected_tokens refuses chars/4 by decision: two
         # estimators reported under one name is how the compaction savings
@@ -2737,14 +2799,16 @@ class CredentialTest(LocalServerTest):
                          "no temp file left behind")
 
     def test_failed_write_back_still_returns_the_fresh_token_and_leaves_no_temp_file(self):
-        # A write that fails (here: the file-size limit is 0, so flushing the
-        # temp file raises) must not lose the token just fetched, must not
-        # report the session expired, and must remove its temp file.
-        creds = self.write_creds()
+        # A write that fails (here: the file-size limit is 64 KiB and the
+        # credentials hold 256 KiB of padding, so flushing the temp file
+        # raises) must not lose the token just fetched, must not report the
+        # session expired, and must remove its temp file. A limit of 0 would
+        # also stop the xtrace and coverage data files, which are small.
+        creds = self.write_creds(padding="x" * (256 * 1024))
         before = creds.read_text()
         e = clean_env()
         e["HOME"] = self.home
-        script = (f'ulimit -f 0; . "{SCRIPTS}/lib.sh"; kemory_resolve_auth'
+        script = (f'ulimit -f 64; . "{SCRIPTS}/lib.sh"; kemory_resolve_auth'
                   ' && echo "$KEMORY_AUTH_HEADER"'
                   ' ; echo "expired=${KEMORY_TOKEN_EXPIRED:-0}"')
         out = run_with_timeout(["bash", "-c", script], text=True,
@@ -2777,6 +2841,18 @@ class CredentialTest(LocalServerTest):
         saved = json.loads(creds.read_text())
         self.assertEqual(saved["refresh_token"], "rotated-refresh")
         self.assertEqual(saved["access_token"], "fresh-token")
+
+    def test_refresh_saves_a_future_expires_at(self):
+        # An unsaved expiry leaves the old past time on disk, so every later
+        # hook refreshes again and rotates the refresh token again.
+        creds = self.write_creds()
+        Recorder.token_payload = {"access_token": "fresh-token",
+                                  "expires_in": 3600}
+        before = time.time()
+        self.assertIn("expired=0", self.resolve().stdout)
+        saved = json.loads(creds.read_text())
+        self.assertGreaterEqual(saved["expires_at"], before + 3500)
+        self.assertLessEqual(saved["expires_at"], time.time() + 3600)
 
     def test_concurrent_refreshes_leave_valid_json(self):
         creds = self.write_creds()
@@ -2915,6 +2991,55 @@ class CredentialTest(LocalServerTest):
         msg = json.loads(r.stdout)["systemMessage"]
         self.assertIn(".mcp.json", msg)
         self.assertNotIn("kemory_secret", msg)
+
+    # --- what /kemory:status prints when the hooks are dead ------------------
+    def status(self, **env):
+        e = clean_env()
+        e.update({"HOME": self.home, "CLAUDE_PROJECT_DIR": self.home,
+                  "KEMORY_URL": f"http://127.0.0.1:{self.port}"})
+        e.update(env)
+        r = run_with_timeout([str(SCRIPTS / "status.sh")], input="{}",
+                             text=True, capture_output=True, env=e)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return r.stdout
+
+    def test_status_reports_an_expired_token_that_could_not_be_refreshed(self):
+        Recorder.token_status = 500
+        self.write_creds()
+        out = self.status()
+        self.assertIn("the stored token is expired and could not be refreshed", out)
+        self.assertIn("run /kemory:login again", out)
+
+    def test_status_reports_a_corrupt_credentials_file(self):
+        d = pathlib.Path(self.home) / ".kemory"
+        d.mkdir(parents=True)
+        creds = d / "credentials-prod"
+        creds.write_text("{not json")
+        out = self.status()
+        self.assertIn(f"{creds} is not valid JSON — every hook is inert", out)
+        self.assertIn("run /kemory:login to write a fresh credential file", out)
+
+    def test_status_with_no_credential_says_how_to_sign_in(self):
+        out = self.status()
+        self.assertIn("no credential the hooks can use — every hook is inert", out)
+        self.assertIn("run /kemory:login (browser sign-in), or set KEMORY_API_KEY", out)
+        self.assertNotIn("which the hooks cannot read", out)
+
+    def test_status_names_an_api_key_that_only_the_mcp_config_holds(self):
+        self.mcp_config({"mcpServers": {"kemory": {
+            "headers": {"X-API-Key": "kemory_secret"}}}})
+        out = self.status()
+        self.assertIn("no credential the hooks can use — every hook is inert", out)
+        self.assertIn(".mcp.json, which the hooks cannot read", out)
+        self.assertIn("export that same key as KEMORY_API_KEY", out)
+        self.assertNotIn("kemory_secret", out)
+        self.assertNotIn("browser sign-in", out)
+
+    def test_status_reports_credentials_the_api_rejects(self):
+        Recorder.get_status = 401
+        self.write_creds(expires_at=time.time() + 3600)
+        out = self.status()
+        self.assertIn("API reachable but rejected the credentials (HTTP 401)", out)
 
 
 class McpEntryTest(LocalServerTest):
@@ -4456,7 +4581,7 @@ class MuseTranscriptTest(LocalServerTest):
     def env(self, muse=True, **extra):
         """Only what Muse passes; the credential file points at the Recorder."""
         e = {"PATH": os.environ.get("PATH", ""), "HOME": self.home, "TMPDIR": self.home,
-             "KEMORY_STORE_NUDGE": "1"}
+             "KEMORY_STORE_NUDGE": "1", **coverage_env()}
         if muse:
             e["MUSE_PLUGIN_ROOT"] = str(ROOT / "plugin")
         e.update(extra)
@@ -5267,7 +5392,7 @@ class CursorPluginTest(unittest.TestCase):
 
     def run_hook(self, arg, path, payload='{"hook_event_name":"sessionStart"}'):
         return run_with_timeout(["bash", str(self.HOOK), arg], input=payload, text=True,
-                              capture_output=True, env={"PATH": path, "HOME": str(self.tmp)})
+                              capture_output=True, env={"PATH": path, "HOME": str(self.tmp), **coverage_env()})
 
     def test_silent_no_op_without_kemory_on_path(self):
         for arg in ("session-start", "capture"):
@@ -5362,7 +5487,7 @@ class MusePluginTest(LocalServerTest):
         """Only what Muse passes: no KEMORY_* and no kemory CLI on PATH."""
         path = ":".join(d for d in os.environ.get("PATH", "").split(":")
                         if not (pathlib.Path(d) / "kemory").exists())
-        env = {"PATH": path, "HOME": self.home, "TMPDIR": self.home}
+        env = {"PATH": path, "HOME": self.home, "TMPDIR": self.home, **coverage_env()}
         if muse:
             env.update({"MUSE_PLUGIN_ROOT": str(ROOT / "plugin"), "MUSE_PLUGIN_ID": "kemory@kemory",
                         "MUSE_PLUGIN_DATA_DIR": str(pathlib.Path(self.home) / "data")})
