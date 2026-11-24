@@ -1,2 +1,0 @@
-### Changed
-- **`/kemory:status` and `/kemory:login` run their scripts through `bash`, and each pre-approves only that one script.** Claude's plugin directory refuses a plugin whose commands pre-approve a script run directly, which it counts as broad shell access. The approval names the script with its path quoted, so it still matches when the plugin is installed under a folder whose path has a space.
