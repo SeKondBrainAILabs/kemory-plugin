@@ -219,6 +219,16 @@ def clean_env(drop_entrypoint=False):
             and not (drop_entrypoint and k == "CLAUDE_CODE_ENTRYPOINT")}
 
 
+def coverage_env():
+    """The variables coverage.py needs in a child that gets a hand-built environment.
+
+    Tests that start a hook from scratch must pass these on, or py_check.sh
+    cannot measure the scripts they run.
+    """
+    return {k: v for k, v in os.environ.items()
+            if k.startswith("COVERAGE_") or k == "PY_CHECK_ROOT"}
+
+
 # Recorder's fields are class attributes shared by every class using it. They
 # are read from vars(), not dir(), which also lists BaseHTTPRequestHandler's own.
 RECORDER_DEFAULTS = {
@@ -4517,7 +4527,7 @@ class MuseTranscriptTest(LocalServerTest):
     def env(self, muse=True, **extra):
         """Only what Muse passes; the credential file points at the Recorder."""
         e = {"PATH": os.environ.get("PATH", ""), "HOME": self.home, "TMPDIR": self.home,
-             "KEMORY_STORE_NUDGE": "1"}
+             "KEMORY_STORE_NUDGE": "1", **coverage_env()}
         if muse:
             e["MUSE_PLUGIN_ROOT"] = str(ROOT / "plugin")
         e.update(extra)
@@ -5328,7 +5338,7 @@ class CursorPluginTest(unittest.TestCase):
 
     def run_hook(self, arg, path, payload='{"hook_event_name":"sessionStart"}'):
         return run_with_timeout(["bash", str(self.HOOK), arg], input=payload, text=True,
-                              capture_output=True, env={"PATH": path, "HOME": str(self.tmp)})
+                              capture_output=True, env={"PATH": path, "HOME": str(self.tmp), **coverage_env()})
 
     def test_silent_no_op_without_kemory_on_path(self):
         for arg in ("session-start", "capture"):
@@ -5423,7 +5433,7 @@ class MusePluginTest(LocalServerTest):
         """Only what Muse passes: no KEMORY_* and no kemory CLI on PATH."""
         path = ":".join(d for d in os.environ.get("PATH", "").split(":")
                         if not (pathlib.Path(d) / "kemory").exists())
-        env = {"PATH": path, "HOME": self.home, "TMPDIR": self.home}
+        env = {"PATH": path, "HOME": self.home, "TMPDIR": self.home, **coverage_env()}
         if muse:
             env.update({"MUSE_PLUGIN_ROOT": str(ROOT / "plugin"), "MUSE_PLUGIN_ID": "kemory@kemory",
                         "MUSE_PLUGIN_DATA_DIR": str(pathlib.Path(self.home) / "data")})
