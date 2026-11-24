@@ -2152,6 +2152,17 @@ class HookTest(LocalServerTest):
         self.recall(session="a")
         self.assertIn("recalled 1", json.loads(self.recall(session="b").stdout)["systemMessage"])
 
+    def test_prompt_recall_caps_the_seen_list_at_500(self):
+        state = pathlib.Path(self.home) / ".kemory" / ".recalled"
+        state.mkdir(parents=True, exist_ok=True)
+        seen_path = state / "cap"
+        seen_path.write_text(json.dumps([f"{i:016x}" for i in range(600)]))
+        Recorder.search_payload = self._hit()
+        self.assertIn("recalled 1", json.loads(self.recall(session="cap").stdout)["systemMessage"])
+        seen = json.loads(seen_path.read_text())
+        self.assertEqual(len(seen), 500)
+        self.assertEqual(seen[0], f"{101:016x}", "the oldest entries are the ones dropped")
+
     def test_prompt_recall_shows_count_not_a_token_estimate(self):
         # recall_log.count_injected_tokens refuses chars/4 by decision: two
         # estimators reported under one name is how the compaction savings
