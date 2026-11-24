@@ -414,6 +414,47 @@ class HookTest(LocalServerTest):
         turn_text = body["content"].split("\n\n")[-1]
         self.assertEqual(len(turn_text), 8000)
 
+    def _capture_burst(self, count, **env):
+        t = self.transcript(*[f"burst-turn-{i:02d}" for i in range(1, count + 1)])
+        self.run_script("capture.sh", {"session_id": "s", "transcript_path": t},
+                        KEMORY_API_KEY="k", KEMORY_AUTO_CAPTURE="1", **env)
+        self.assertEqual(len(Recorder.posts), 1)
+        _, body, _path = Recorder.posts[0]
+        return body
+
+    def test_capture_posts_only_the_newest_12_turns_by_default(self):
+        body = self._capture_burst(15)
+        self.assertEqual(body["metadata"]["turns"], 12)
+        self.assertIn("turns 4-15)", body["content"])
+        for dropped in ("01", "02", "03"):
+            self.assertNotIn(f"burst-turn-{dropped}", body["content"])
+        self.assertIn("burst-turn-04", body["content"])
+        self.assertIn("burst-turn-15", body["content"])
+
+    def test_capture_max_turns_env_bounds_the_posted_turns(self):
+        body = self._capture_burst(8, KEMORY_CAPTURE_MAX_TURNS="3")
+        self.assertEqual(body["metadata"]["turns"], 3)
+        self.assertIn("turns 6-8)", body["content"])
+        self.assertNotIn("burst-turn-05", body["content"])
+        self.assertIn("burst-turn-06", body["content"])
+
+    def test_capture_window_label_counts_from_the_captured_mark(self):
+        t = self.transcript("burst-turn-01", "burst-turn-02", "burst-turn-03")
+        args = {"session_id": "s", "transcript_path": t}
+        kw = {"KEMORY_API_KEY": "k", "KEMORY_AUTO_CAPTURE": "1",
+              "KEMORY_CAPTURE_MAX_TURNS": "3"}
+        self.run_script("capture.sh", args, **kw)
+        with open(t, "a") as f:
+            for i in range(4, 9):
+                f.write(json.dumps({"type": "user",
+                                    "message": {"content": f"burst-turn-{i:02d}"}}) + "\n")
+        self.run_script("capture.sh", args, **kw)
+        self.assertEqual(len(Recorder.posts), 2)
+        body = Recorder.posts[1][1]
+        self.assertEqual(body["metadata"]["turns"], 3)
+        self.assertIn("turns 6-8)", body["content"])
+        self.assertNotIn("burst-turn-04", body["content"])
+
     def test_capture_skips_when_legacy_bare_sha_marker_matches_digest(self):
         t = self.transcript("one task")
         args = {"session_id": "s", "transcript_path": t}
