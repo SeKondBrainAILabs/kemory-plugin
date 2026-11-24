@@ -2799,14 +2799,16 @@ class CredentialTest(LocalServerTest):
                          "no temp file left behind")
 
     def test_failed_write_back_still_returns_the_fresh_token_and_leaves_no_temp_file(self):
-        # A write that fails (here: the file-size limit is 0, so flushing the
-        # temp file raises) must not lose the token just fetched, must not
-        # report the session expired, and must remove its temp file.
-        creds = self.write_creds()
+        # A write that fails (here: the file-size limit is 64 KiB and the
+        # credentials hold 256 KiB of padding, so flushing the temp file
+        # raises) must not lose the token just fetched, must not report the
+        # session expired, and must remove its temp file. A limit of 0 would
+        # also stop the xtrace and coverage data files, which are small.
+        creds = self.write_creds(padding="x" * (256 * 1024))
         before = creds.read_text()
         e = clean_env()
         e["HOME"] = self.home
-        script = (f'ulimit -f 0; . "{SCRIPTS}/lib.sh"; kemory_resolve_auth'
+        script = (f'ulimit -f 64; . "{SCRIPTS}/lib.sh"; kemory_resolve_auth'
                   ' && echo "$KEMORY_AUTH_HEADER"'
                   ' ; echo "expired=${KEMORY_TOKEN_EXPIRED:-0}"')
         out = run_with_timeout(["bash", "-c", script], text=True,
