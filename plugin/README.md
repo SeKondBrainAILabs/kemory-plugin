@@ -97,7 +97,8 @@ fails, `/kemory:status` says so rather than leaving the hooks quietly rejected.
 ### Platform support
 
 The CLI ships for macOS and Linux (arm64, x64) and Windows x64. The hooks are
-narrower: `bash` scripts calling `curl` and `python3`, so on Windows they need
+narrower: `bash` scripts calling `curl` and `python3` (3.9 or newer, the version
+macOS ships), so on Windows they need
 Git Bash or WSL. Untested there, so Windows is not claimed for the hooks even
 though the CLI runs on it.
 

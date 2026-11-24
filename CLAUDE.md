@@ -86,6 +86,10 @@ Hooks:
   must not contain a hyphen.
 - Hook programs read the payload from `HOOK_INPUT`, not `sys.stdin`: the script has
   already consumed stdin, as `store-nudge.sh:24-25` does.
+- Hooks run on the user's own `python3`, and the minimum is 3.9 (what macOS ships).
+  `check.sh`'s vermin step enforces it on `plugin/scripts`, and ruff targets py39. An
+  import that needs newer must sit in `try/except ImportError` with `# novermin` on the
+  import line, as `kemory_lib.py` does for `tomllib`.
 
 Redaction (`plugin/scripts/redact.py`):
 

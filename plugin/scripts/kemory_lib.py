@@ -306,7 +306,7 @@ def grok_disabled_server():
 
     names = None
     try:
-        import tomllib  # Python 3.11+
+        import tomllib  # novermin: Python 3.11+, guarded below
     except ImportError:
         tomllib = None
 
