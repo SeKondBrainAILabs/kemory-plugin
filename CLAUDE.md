@@ -161,11 +161,11 @@ and gates on no figure. Traces hold expanded values, such as the tests' fake tok
 a temp dir deleted on exit: never point it at real credentials.
 
 The "python lint (ruff)" step runs `ruff check .` (B, E4, E7, E9 and F rules, `ruff.toml`). It uses
-a `ruff` on PATH only if it is 0.17.5, else `pipx run --spec ruff==0.17.5 ruff`, which is
+a `ruff` on PATH only if it is 0.17.6, else `pipx run --spec ruff==0.17.6 ruff`, which is
 how CI gets it; with neither it fails. Bump the pin in `check.sh` deliberately.
 
 If shellcheck is not on PATH (apt unreachable, `pip install` blocked by PEP 668),
-`python3 -m venv /tmp/tools && /tmp/tools/bin/pip install shellcheck-py ruff==0.17.5`
+`python3 -m venv /tmp/tools && /tmp/tools/bin/pip install shellcheck-py ruff==0.17.6`
 provides both tools in `/tmp/tools/bin`. To clone the repo into `/tmp`, use
 `git clone --no-local`: `--local` fails with "Invalid cross-device link" when the
 workspace and `/tmp` are on different filesystems.
