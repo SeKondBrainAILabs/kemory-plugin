@@ -219,6 +219,16 @@ def clean_env(drop_entrypoint=False):
             and not (drop_entrypoint and k == "CLAUDE_CODE_ENTRYPOINT")}
 
 
+def coverage_env():
+    """The variables coverage.py needs in a child that gets a hand-built environment.
+
+    Tests that start a hook from scratch must pass these on, or py_check.sh
+    cannot measure the scripts they run.
+    """
+    return {k: v for k, v in os.environ.items()
+            if k.startswith("COVERAGE_") or k == "PY_CHECK_ROOT"}
+
+
 # Recorder's fields are class attributes shared by every class using it. They
 # are read from vars(), not dir(), which also lists BaseHTTPRequestHandler's own.
 RECORDER_DEFAULTS = {
@@ -2789,14 +2799,16 @@ class CredentialTest(LocalServerTest):
                          "no temp file left behind")
 
     def test_failed_write_back_still_returns_the_fresh_token_and_leaves_no_temp_file(self):
-        # A write that fails (here: the file-size limit is 0, so flushing the
-        # temp file raises) must not lose the token just fetched, must not
-        # report the session expired, and must remove its temp file.
-        creds = self.write_creds()
+        # A write that fails (here: the file-size limit is 64 KiB and the
+        # credentials hold 256 KiB of padding, so flushing the temp file
+        # raises) must not lose the token just fetched, must not report the
+        # session expired, and must remove its temp file. A limit of 0 would
+        # also stop the xtrace and coverage data files, which are small.
+        creds = self.write_creds(padding="x" * (256 * 1024))
         before = creds.read_text()
         e = clean_env()
         e["HOME"] = self.home
-        script = (f'ulimit -f 0; . "{SCRIPTS}/lib.sh"; kemory_resolve_auth'
+        script = (f'ulimit -f 64; . "{SCRIPTS}/lib.sh"; kemory_resolve_auth'
                   ' && echo "$KEMORY_AUTH_HEADER"'
                   ' ; echo "expired=${KEMORY_TOKEN_EXPIRED:-0}"')
         out = run_with_timeout(["bash", "-c", script], text=True,
@@ -2979,6 +2991,55 @@ class CredentialTest(LocalServerTest):
         msg = json.loads(r.stdout)["systemMessage"]
         self.assertIn(".mcp.json", msg)
         self.assertNotIn("kemory_secret", msg)
+
+    # --- what /kemory:status prints when the hooks are dead ------------------
+    def status(self, **env):
+        e = clean_env()
+        e.update({"HOME": self.home, "CLAUDE_PROJECT_DIR": self.home,
+                  "KEMORY_URL": f"http://127.0.0.1:{self.port}"})
+        e.update(env)
+        r = run_with_timeout([str(SCRIPTS / "status.sh")], input="{}",
+                             text=True, capture_output=True, env=e)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return r.stdout
+
+    def test_status_reports_an_expired_token_that_could_not_be_refreshed(self):
+        Recorder.token_status = 500
+        self.write_creds()
+        out = self.status()
+        self.assertIn("the stored token is expired and could not be refreshed", out)
+        self.assertIn("run /kemory:login again", out)
+
+    def test_status_reports_a_corrupt_credentials_file(self):
+        d = pathlib.Path(self.home) / ".kemory"
+        d.mkdir(parents=True)
+        creds = d / "credentials-prod"
+        creds.write_text("{not json")
+        out = self.status()
+        self.assertIn(f"{creds} is not valid JSON — every hook is inert", out)
+        self.assertIn("run /kemory:login to write a fresh credential file", out)
+
+    def test_status_with_no_credential_says_how_to_sign_in(self):
+        out = self.status()
+        self.assertIn("no credential the hooks can use — every hook is inert", out)
+        self.assertIn("run /kemory:login (browser sign-in), or set KEMORY_API_KEY", out)
+        self.assertNotIn("which the hooks cannot read", out)
+
+    def test_status_names_an_api_key_that_only_the_mcp_config_holds(self):
+        self.mcp_config({"mcpServers": {"kemory": {
+            "headers": {"X-API-Key": "kemory_secret"}}}})
+        out = self.status()
+        self.assertIn("no credential the hooks can use — every hook is inert", out)
+        self.assertIn(".mcp.json, which the hooks cannot read", out)
+        self.assertIn("export that same key as KEMORY_API_KEY", out)
+        self.assertNotIn("kemory_secret", out)
+        self.assertNotIn("browser sign-in", out)
+
+    def test_status_reports_credentials_the_api_rejects(self):
+        Recorder.get_status = 401
+        self.write_creds(expires_at=time.time() + 3600)
+        out = self.status()
+        self.assertIn("API reachable but rejected the credentials (HTTP 401)", out)
 
 
 class McpEntryTest(LocalServerTest):
@@ -3869,6 +3930,58 @@ class DeviceLoginTest(LocalServerTest):
         self.assertEqual(c["active_org_id"], "org-switched-to")
         self.assertEqual(c["org_id"], "org-default")
 
+    def test_signing_in_as_another_account_drops_the_old_active_org(self):
+        # The kept active_org_id belongs to the account that chose it with
+        # `kemory use`. Signing in as a different account must not carry it
+        # over, or every hook sends X-Organization-ID for an org the new
+        # account was never switched into.
+        self.write_creds()  # person@example.com, active org "org-switched-to"
+        IdpRecorder.token_script = [(200, self.tokens(email="other@example.com",
+                                                      org_id="org-other"))]
+        r = self.run_login()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        c = self.creds()
+        self.assertEqual(c["email"], "other@example.com")
+        self.assertEqual(c["org_id"], "org-other")
+        self.assertEqual(c["active_org_id"], "org-other")
+
+    def test_signing_in_as_another_account_does_not_keep_the_old_refresh_token(self):
+        self.write_creds()
+        t = self.tokens(email="other@example.com")
+        del t["refresh_token"]
+        IdpRecorder.token_script = [(200, t)]
+        r = self.run_login()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.creds()["refresh_token"], "")
+
+    def test_signing_in_as_another_account_does_not_keep_the_old_org_or_email(self):
+        self.write_creds()
+        t = self.tokens()
+        t["access_token"] = _jwt({"email": "other@example.com"})
+        IdpRecorder.token_script = [(200, t)]
+        r = self.run_login()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        c = self.creds()
+        self.assertEqual(c["email"], "other@example.com")
+        self.assertEqual(c["org_id"], "")
+        self.assertEqual(c["active_org_id"], "")
+
+    def test_the_same_account_in_other_case_keeps_the_switched_org(self):
+        self.write_creds()
+        IdpRecorder.token_script = [(200, self.tokens(email=" Person@Example.COM "))]
+        r = self.run_login()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.creds()["active_org_id"], "org-switched-to")
+
+    def test_a_token_without_email_does_not_keep_the_switched_org(self):
+        self.write_creds()
+        t = self.tokens()
+        t["access_token"] = _jwt({"org_id": "org-default"})
+        IdpRecorder.token_script = [(200, t)]
+        r = self.run_login()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.creds()["active_org_id"], "org-default")
+
     def test_a_first_sign_in_defaults_the_active_org(self):
         self.run_login()
         c = self.creds()
@@ -4468,7 +4581,7 @@ class MuseTranscriptTest(LocalServerTest):
     def env(self, muse=True, **extra):
         """Only what Muse passes; the credential file points at the Recorder."""
         e = {"PATH": os.environ.get("PATH", ""), "HOME": self.home, "TMPDIR": self.home,
-             "KEMORY_STORE_NUDGE": "1"}
+             "KEMORY_STORE_NUDGE": "1", **coverage_env()}
         if muse:
             e["MUSE_PLUGIN_ROOT"] = str(ROOT / "plugin")
         e.update(extra)
@@ -5279,7 +5392,7 @@ class CursorPluginTest(unittest.TestCase):
 
     def run_hook(self, arg, path, payload='{"hook_event_name":"sessionStart"}'):
         return run_with_timeout(["bash", str(self.HOOK), arg], input=payload, text=True,
-                              capture_output=True, env={"PATH": path, "HOME": str(self.tmp)})
+                              capture_output=True, env={"PATH": path, "HOME": str(self.tmp), **coverage_env()})
 
     def test_silent_no_op_without_kemory_on_path(self):
         for arg in ("session-start", "capture"):
@@ -5374,7 +5487,7 @@ class MusePluginTest(LocalServerTest):
         """Only what Muse passes: no KEMORY_* and no kemory CLI on PATH."""
         path = ":".join(d for d in os.environ.get("PATH", "").split(":")
                         if not (pathlib.Path(d) / "kemory").exists())
-        env = {"PATH": path, "HOME": self.home, "TMPDIR": self.home}
+        env = {"PATH": path, "HOME": self.home, "TMPDIR": self.home, **coverage_env()}
         if muse:
             env.update({"MUSE_PLUGIN_ROOT": str(ROOT / "plugin"), "MUSE_PLUGIN_ID": "kemory@kemory",
                         "MUSE_PLUGIN_DATA_DIR": str(pathlib.Path(self.home) / "data")})
