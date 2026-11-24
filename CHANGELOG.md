@@ -3,6 +3,20 @@
 All notable changes to this project are documented here. This project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.17.3] — 2026-11-24
+
+### Changed
+- **`/kemory:status` and `/kemory:login` run their scripts through `bash`, and each pre-approves only that one script.** Claude's plugin directory refuses a plugin whose commands pre-approve a script run directly, which it counts as broad shell access. The approval names the script with its path quoted, so it still matches when the plugin is installed under a folder whose path has a space.
+
+### Fixed
+- **Signing in as a different account no longer keeps the previous account's organisation or refresh token.** Hooks and MCP calls now act in the new account's own organisation; signing in again as the same account still keeps the organisation chosen with `kemory use`.
+
+### Notes
+- The hooks need `python3` 3.9 or newer (the version macOS ships). This is now stated in the READMEs and checked in CI.
+- The README and the marketplace entry no longer say kemory-panel shows the memories in context above the prompt. Since kemory-panel 0.21.0 the band shows a brief for the repo before the first prompt, because Claude Code's built-in security layer hides other hooks' output from plugins in the desktop app and in managed organisations.
+- The README no longer says Claude Desktop has no plugins. Its agent mode, Cowork, installs Kemory from the Claude plugin directory and runs its hooks. It runs the version listed in the directory, which can trail this repository's release. Its chat still takes Kemory only as MCP tools.
+- The README points to kemory-panel instead of describing it. Its own README says what the add-on adds and what it needs, so the two no longer drift apart.
+
 ## [0.17.2] — 2026-11-23
 
 ### Fixed
