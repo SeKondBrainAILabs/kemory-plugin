@@ -3805,6 +3805,58 @@ class DeviceLoginTest(LocalServerTest):
         self.assertEqual(c["active_org_id"], "org-switched-to")
         self.assertEqual(c["org_id"], "org-default")
 
+    def test_signing_in_as_another_account_drops_the_old_active_org(self):
+        # The kept active_org_id belongs to the account that chose it with
+        # `kemory use`. Signing in as a different account must not carry it
+        # over, or every hook sends X-Organization-ID for an org the new
+        # account was never switched into.
+        self.write_creds()  # person@example.com, active org "org-switched-to"
+        IdpRecorder.token_script = [(200, self.tokens(email="other@example.com",
+                                                      org_id="org-other"))]
+        r = self.run_login()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        c = self.creds()
+        self.assertEqual(c["email"], "other@example.com")
+        self.assertEqual(c["org_id"], "org-other")
+        self.assertEqual(c["active_org_id"], "org-other")
+
+    def test_signing_in_as_another_account_does_not_keep_the_old_refresh_token(self):
+        self.write_creds()
+        t = self.tokens(email="other@example.com")
+        del t["refresh_token"]
+        IdpRecorder.token_script = [(200, t)]
+        r = self.run_login()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.creds()["refresh_token"], "")
+
+    def test_signing_in_as_another_account_does_not_keep_the_old_org_or_email(self):
+        self.write_creds()
+        t = self.tokens()
+        t["access_token"] = _jwt({"email": "other@example.com"})
+        IdpRecorder.token_script = [(200, t)]
+        r = self.run_login()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        c = self.creds()
+        self.assertEqual(c["email"], "other@example.com")
+        self.assertEqual(c["org_id"], "")
+        self.assertEqual(c["active_org_id"], "")
+
+    def test_the_same_account_in_other_case_keeps_the_switched_org(self):
+        self.write_creds()
+        IdpRecorder.token_script = [(200, self.tokens(email=" Person@Example.COM "))]
+        r = self.run_login()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.creds()["active_org_id"], "org-switched-to")
+
+    def test_a_token_without_email_does_not_keep_the_switched_org(self):
+        self.write_creds()
+        t = self.tokens()
+        t["access_token"] = _jwt({"org_id": "org-default"})
+        IdpRecorder.token_script = [(200, t)]
+        r = self.run_login()
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(self.creds()["active_org_id"], "org-default")
+
     def test_a_first_sign_in_defaults_the_active_org(self):
         self.run_login()
         c = self.creds()
