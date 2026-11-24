@@ -1775,8 +1775,6 @@ class HookTest(LocalServerTest):
         root = "/Users/x/Library/Application Support/Claude/plugin"
         hooks = json.loads((ROOT / "plugin" / "hooks" / "hooks.json").read_text())["hooks"]
         commands = [h["command"] for groups in hooks.values() for g in groups for h in g["hooks"]]
-        for md in sorted((ROOT / "plugin" / "commands").glob("*.md")):
-            commands += re.findall(r"^!`(.+)`$", md.read_text(), re.M)
         self.assertTrue(commands)
         for command in commands:
             with self.subTest(command=command):
@@ -1784,6 +1782,32 @@ class HookTest(LocalServerTest):
                 argv = shlex.split(command.replace("${CLAUDE_PLUGIN_ROOT}", root))
                 self.assertEqual(len(argv), 1)
                 self.assertTrue(argv[0].startswith(root + "/scripts/"))
+        # A command's !`...` line runs its script through bash, the form the
+        # plugin directory accepts in allowed-tools; the whole path is quoted
+        # because Claude Code matches allowed-tools against the command text.
+        mds = sorted((ROOT / "plugin" / "commands").glob("*.md"))
+        self.assertTrue(mds)
+        for md in mds:
+            for line in re.findall(r"^!`(.+)`$", md.read_text(), re.M):
+                with self.subTest(command=line):
+                    self.assertRegex(line, r'^bash "\$\{CLAUDE_PLUGIN_ROOT\}/scripts/[a-z]+\.sh"$')
+                    argv = shlex.split(line.replace("${CLAUDE_PLUGIN_ROOT}", root))
+                    self.assertEqual(argv[0], "bash")
+                    self.assertEqual(len(argv), 2)
+                    self.assertTrue(argv[1].startswith(root + "/scripts/"))
+
+    def test_allowed_tools_approve_the_command_line_exactly(self):
+        # Claude Code approves a !`...` line only when an allowed-tools entry
+        # matches its text, quotes included; a mismatch fails the command with
+        # "This command requires approval". The plugin directory refuses
+        # anything but the script named through bash, braces kept.
+        for md in sorted((ROOT / "plugin" / "commands").glob("*.md")):
+            text = md.read_text()
+            for line in re.findall(r"^!`(.+)`$", text, re.M):
+                with self.subTest(file=md.name):
+                    allowed = re.search(r"^allowed-tools: (.+)$", text, re.M)
+                    self.assertIsNotNone(allowed)
+                    self.assertEqual(allowed.group(1), f"Bash({line} *)")
 
     def test_capture_is_registered_on_stop_precompact_and_session_end(self):
         hooks = json.loads((ROOT / "plugin" / "hooks" / "hooks.json").read_text())
